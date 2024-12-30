@@ -49,3 +49,14 @@ gym.register(
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_camera_ppo_cfg.yaml",
     },
 )
+
+gym.register(
+    id="Isaac-Double-Cartpole-Direct-v0",
+    entry_point=f"{__name__}.marl_double_cartpole_env:MARLDoubleCartpoleEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.marl_double_cartpole_env:MARLDoubleCartpoleEnvCfg",
+        # "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_camera_ppo_cfg.yaml",
+        "skrl_cfg_entry_point": f"{agents.__name__}:skrl_double_cartpole_ppo_cfg.yaml",
+    },
+)
