@@ -24,7 +24,7 @@ from omni.isaac.lab.utils.math import sample_uniform
 
 
 @configclass
-class MARLDoubleCartpoleEnvCfg(DirectMARLEnvCfg):
+class DoubleCartpoleEnvCfgV0(DirectMARLEnvCfg):
     # env
     decimation = 2
     episode_length_s = 5.0
@@ -60,10 +60,10 @@ class MARLDoubleCartpoleEnvCfg(DirectMARLEnvCfg):
     rew_scale_pole_vel = -0.005
 
 
-class MARLDoubleCartpoleEnv(DirectMARLEnv):
-    cfg: MARLDoubleCartpoleEnvCfg
+class DoubleCartpoleEnvV0(DirectMARLEnv):
+    cfg: DoubleCartpoleEnvCfgV0
 
-    def __init__(self, cfg: MARLDoubleCartpoleEnvCfg, render_mode: str | None = None, **kwargs):
+    def __init__(self, cfg: DoubleCartpoleEnvCfgV0, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
 
         self.action_scales = self.cfg.action_scales
