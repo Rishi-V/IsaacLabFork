@@ -10,16 +10,18 @@ import gymnasium as gym
 import torch
 
 import omni.isaac.lab.sim as sim_utils
-from omni.isaac.lab.assets import Articulation
-from omni.isaac.lab.envs import DirectRLEnv
-from omni.isaac.lab.sensors import ContactSensor, RayCaster
+from omni.isaac.lab.assets import Articulation, ArticulationCfg
+from omni.isaac.lab.envs import DirectMARLEnv, DirectMARLEnvCfg
+from omni.isaac.lab.sensors import ContactSensor, RayCaster, ContactSensorCfg
 from omni.isaac.lab.scene import InteractiveSceneCfg, InteractiveScene
 
 from .double_anymal_c_env_cfg import DoubleAnymalCFlatEnvCfg
 
 class SingleAgent:
-    def __init__(self, cfg: DoubleAnymalCFlatEnvCfg, robot_cfg, contact_cfg, num_envs: int):
+    def __init__(self, cfg: DoubleAnymalCFlatEnvCfg, agent_name: str, robot_cfg: ArticulationCfg, 
+                 contact_cfg: ContactSensorCfg, num_envs: int):
         self.cfg = cfg
+        self.agent_name = agent_name
         self.robot_cfg = robot_cfg
         self.contact_cfg = contact_cfg
         self.num_envs = num_envs
@@ -28,22 +30,23 @@ class SingleAgent:
         self._robot = Articulation(self.robot_cfg)
         self._contact_sensor = ContactSensor(self.contact_cfg)
 
-    def post_setup_scene(self, device: torch.device, action_dim, step_dt: float):
+    def post_setup_scene(self, device: torch.device, step_dt: float):
         self.device = device
         # self.single_action_space = single_action_space
-        self.action_dim = action_dim
+        self.action_dim: int = self.cfg.action_spaces[self.agent_name] # Ignore squiggly
         self.step_dt = step_dt
+        self.action_scale = self.cfg.action_scales[self.agent_name]
 
         # Joint position command (deviation from default joint positions)
         # self._actions = torch.zeros(self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device)
         # self._previous_actions = torch.zeros(
         #     self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device
         # )
-        self._actions = torch.zeros(self.num_envs, action_dim, device=self.device)
-        self._previous_actions = torch.zeros(self.num_envs, action_dim, device=self.device)
+        self._actions = torch.zeros(self.num_envs, self.action_dim, device=self.device)
+        self._previous_actions = torch.zeros(self.num_envs, self.action_dim, device=self.device)
 
         # X/Y linear velocity and yaw angular velocity commands
-        self._commands = torch.zeros(self.num_envs, 3, device=self.device)
+        self._commands = torch.zeros(self.num_envs, 3, device=self.device) # (N,3)
 
         # Logging
         self._episode_sums = {
@@ -69,12 +72,12 @@ class SingleAgent:
 
     def pre_physics_step(self, actions: torch.Tensor):
         self._actions = actions.clone()
-        self._processed_actions = self.cfg.action_scale * self._actions + self._robot.data.default_joint_pos
+        self._processed_actions = self.action_scale * self._actions + self._robot.data.default_joint_pos
 
     def apply_action(self):
         self._robot.set_joint_position_target(self._processed_actions)
 
-    def get_observations(self) -> dict:
+    def get_observations(self) -> torch.Tensor:
         self._previous_actions = self._actions.clone()
         height_data = None
         obs = torch.cat(
@@ -94,8 +97,9 @@ class SingleAgent:
             ],
             dim=-1,
         )
-        observations = {"policy": obs}
-        return observations
+        # observations = {"policy": obs}
+        # return observations
+        return obs
 
     def get_rewards(self) -> torch.Tensor:
         # linear velocity tracking
@@ -156,7 +160,8 @@ class SingleAgent:
         self._actions[env_ids] = 0.0
         self._previous_actions[env_ids] = 0.0
         # Sample new commands
-        self._commands[env_ids] = torch.zeros_like(self._commands[env_ids]).uniform_(-1.0, 1.0)
+        self._commands[env_ids] = torch.zeros_like(self._commands[env_ids]).uniform_(-1.0, 1.0) # (N,3)
+        self._commands[env_ids, 2] = 0.0 # Force yaw to be zero
         # Reset robot state
         joint_pos = self._robot.data.default_joint_pos[env_ids]
         joint_vel = self._robot.data.default_joint_vel[env_ids]
@@ -171,23 +176,23 @@ class SingleAgent:
         return self._robot
 
 
-class DoubleAnymalCFlatEnv(DirectRLEnv):
+class DoubleAnymalCFlatEnv(DirectMARLEnv):
     cfg: DoubleAnymalCFlatEnvCfg
 
     def __init__(self, cfg: DoubleAnymalCFlatEnvCfg, render_mode: str | None = None, **kwargs):
         num_envs = cfg.scene.num_envs
-        self._r1 = SingleAgent(cfg, cfg.robot1, cfg.contact_sensor1, num_envs)
-        self._r2 = SingleAgent(cfg, cfg.robot2, cfg.contact_sensor2, num_envs)
+        self._r1 = SingleAgent(cfg, "robot1", cfg.robot_cfg1, cfg.contact_sensor1, num_envs)
+        self._r2 = SingleAgent(cfg, "robot2", cfg.robot_cfg2, cfg.contact_sensor2, num_envs)
         super().__init__(cfg, render_mode, **kwargs)
 
         # Joint position command (deviation from default joint positions)
-        self._actions = torch.zeros(self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device)
+        # self._actions = torch.zeros(self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device)
         # self._previous_actions = torch.zeros(
         #     self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device
         # )
 
         # X/Y linear velocity and yaw angular velocity commands
-        self._commands = torch.zeros(self.num_envs, 3, device=self.device)
+        # self._commands = torch.zeros(self.num_envs, 3, device=self.device)
 
         # Logging
         self._episode_sums = {
@@ -207,8 +212,8 @@ class DoubleAnymalCFlatEnv(DirectRLEnv):
         }
 
         # Get specific body indices
-        self._r1.post_setup_scene(self.device, self.cfg.action_space // 2, self.step_dt) # Ignore this red squiggly
-        self._r2.post_setup_scene(self.device, self.cfg.action_space // 2, self.step_dt) # Ignore this red squiggly
+        self._r1.post_setup_scene(self.device, self.step_dt) # Ignore this red squiggly
+        self._r2.post_setup_scene(self.device, self.step_dt) # Ignore this red squiggly
         # self._base_id, _ = self._contact_sensor.find_bodies("base")
         # self._feet_ids, _ = self._contact_sensor.find_bodies(".*FOOT")
         # self._undesired_contact_body_ids, _ = self._contact_sensor.find_bodies(".*THIGH")
@@ -232,35 +237,39 @@ class DoubleAnymalCFlatEnv(DirectRLEnv):
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
 
-    def _pre_physics_step(self, actions: torch.Tensor):
-        self._r1.pre_physics_step(actions[:, : self.cfg.action_space // 2]) # Ignore this red squiggly
-        self._r2.pre_physics_step(actions[:, self.cfg.action_space // 2 :]) # Ignore this red squiggly
+    def _pre_physics_step(self, actions: dict[str, torch.Tensor]) -> None:
+        self._r1.pre_physics_step(actions["robot1"])
+        self._r2.pre_physics_step(actions["robot2"])
 
     def _apply_action(self):
         self._r1.apply_action()
         self._r2.apply_action()
 
-    def _get_observations(self) -> dict:
-        obs1 = self._r1.get_observations()
-        obs2 = self._r2.get_observations()
-        # self._previous_actions = self._actions.clone()
-
-        observations = {"policy": torch.cat((obs1["policy"], obs2["policy"]), dim=1)}
-        # tmp = observations["policy"]
-        # print(f"Combined shape: {tmp.shape}")
+    def _get_observations(self) -> dict[str, torch.Tensor]:
+        observations = {
+            "robot1": self._r1.get_observations(),
+            "robot2": self._r2.get_observations()
+        }
         return observations
 
-    def _get_rewards(self) -> torch.Tensor:
-        total_reward1 = self._r1.get_rewards()
-        total_reward2 = self._r2.get_rewards()
-        return total_reward1 + total_reward2
+    def _get_rewards(self) -> dict[str, torch.Tensor]:
+        total_reward = {
+            "robot1": self._r1.get_rewards(),
+            "robot2": self._r2.get_rewards(),
+        }
+        return total_reward
 
-    def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
+    def _get_dones(self) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+        terminated = {
+            "robot1": self._r1.get_dones(),
+            "robot2": self._r2.get_dones(),
+        }
         time_out = self.episode_length_buf >= self.max_episode_length - 1
-        died1 = self._r1.get_dones()
-        died2 = self._r2.get_dones()
-        died = died1 | died2
-        return died, time_out
+        time_outs = {
+            "robot1": time_out,
+            "robot2": time_out,
+        }
+        return terminated, time_outs
 
     def _reset_idx(self, env_ids: torch.Tensor | None):
         if env_ids is None:
@@ -279,6 +288,6 @@ class DoubleAnymalCFlatEnv(DirectRLEnv):
         self.extras["log"] = dict()
         self.extras["log"].update(extras)
         extras = dict()
-        extras["Episode_Termination/base_contact"] = torch.count_nonzero(self.reset_terminated[env_ids]).item()
-        extras["Episode_Termination/time_out"] = torch.count_nonzero(self.reset_time_outs[env_ids]).item()
+        # extras["Episode_Termination/base_contact"] = torch.count_nonzero(self.reset_terminated[env_ids]).item()
+        # extras["Episode_Termination/time_out"] = torch.count_nonzero(self.reset_time_outs[env_ids]).item()
         self.extras["log"].update(extras)

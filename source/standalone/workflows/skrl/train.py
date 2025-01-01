@@ -14,6 +14,7 @@ a more user-friendly way.
 
 import argparse
 import sys
+import pdb
 
 from omni.isaac.lab.app import AppLauncher
 
@@ -152,6 +153,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
 
+    # pdb.set_trace()
     # convert to single-agent instance if required by the RL algorithm
     if isinstance(env.unwrapped, DirectMARLEnv) and algorithm in ["ppo"]:
         env = multi_agent_to_single_agent(env)
@@ -168,6 +170,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         print_dict(video_kwargs, nesting=4)
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
+    # pdb.set_trace()
     # wrap around environment for skrl
     env = SkrlVecEnvWrapper(env, ml_framework=args_cli.ml_framework)  # same as: `wrap_env(env, wrapper="auto")`
 
