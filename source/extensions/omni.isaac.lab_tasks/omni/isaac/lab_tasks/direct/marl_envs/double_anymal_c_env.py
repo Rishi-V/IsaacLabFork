@@ -17,6 +17,9 @@ from omni.isaac.lab.scene import InteractiveSceneCfg, InteractiveScene
 
 from .double_anymal_c_env_cfg import DoubleAnymalCFlatEnvCfg
 
+from omni.isaac.lab.markers import VisualizationMarkers
+from omni.isaac.lab.markers import RED_ARROW_X_MARKER_CFG, BLUE_ARROW_X_MARKER_CFG
+
 class SingleAgent:
     def __init__(self, cfg: DoubleAnymalCFlatEnvCfg, agent_name: str, robot_cfg: ArticulationCfg, 
                  contact_cfg: ContactSensorCfg, num_envs: int):
@@ -176,6 +179,32 @@ class SingleAgent:
 
     def get_robot(self):
         return self._robot
+    
+    def set_debug_vis_impl(self, debug_vis: bool):
+        # create markers if necessary for the first tome
+        if debug_vis:
+            if not hasattr(self, "goal_pos_visualizer"):
+                if self.agent_name == "robot1":
+                    marker_cfg = RED_ARROW_X_MARKER_CFG.copy()
+                else:
+                    marker_cfg = BLUE_ARROW_X_MARKER_CFG.copy()
+                # marker_cfg.markers["arrow"].size = (0.05, 0.05, 0.05)
+                # marker_cfg = CUBOID_MARKER_CFG.copy()
+                # marker_cfg.markers["cuboid"].size = (0.05, 0.05, 0.05)
+                # -- goal pose
+                marker_cfg.prim_path = f"/Visuals/Command/{self.agent_name}/goal_position"
+                self.goal_pos_visualizer = VisualizationMarkers(marker_cfg)
+            # set their visibility to true
+            self.goal_pos_visualizer.set_visibility(True)
+        else:
+            if hasattr(self, "goal_pos_visualizer"):
+                self.goal_pos_visualizer.set_visibility(False)
+
+    def debug_vis_callback(self, event):
+        # update the markers
+        target_loc = self._robot.data.root_com_pos_w.clone()  # (N,3)
+        target_loc[:, 2] += 0.2
+        self.goal_pos_visualizer.visualize(target_loc)
 
 
 class DoubleAnymalCFlatEnv(DirectMARLEnv):
@@ -219,6 +248,8 @@ class DoubleAnymalCFlatEnv(DirectMARLEnv):
         # self._base_id, _ = self._contact_sensor.find_bodies("base")
         # self._feet_ids, _ = self._contact_sensor.find_bodies(".*FOOT")
         # self._undesired_contact_body_ids, _ = self._contact_sensor.find_bodies(".*THIGH")
+        
+        self.set_debug_vis(debug_vis=cfg.debug_vis)
 
     def _setup_scene(self):
         self._r1.setup_scene()
@@ -300,3 +331,11 @@ class DoubleAnymalCFlatEnv(DirectMARLEnv):
         # extras["Episode_Termination/base_contact"] = torch.count_nonzero(self.reset_terminated[env_ids]).item()
         # extras["Episode_Termination/time_out"] = torch.count_nonzero(self.reset_time_outs[env_ids]).item()
         self.extras["log"].update(extras)
+
+    def _set_debug_vis_impl(self, debug_vis: bool):
+        self._r1.set_debug_vis_impl(debug_vis)
+        self._r2.set_debug_vis_impl(debug_vis)
+        
+    def _debug_vis_callback(self, event):
+        self._r1.debug_vis_callback(event)
+        self._r2.debug_vis_callback(event)

@@ -87,6 +87,7 @@ ANYMAL_C_CFG_COLOR = ArticulationCfg(
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             enabled_self_collisions=True, solver_position_iteration_count=4, solver_velocity_iteration_count=0
         ),
+        visual_material=sim_utils.GlassMdlCfg(glass_color=(0.0, 0.1, 0.0)),
         # collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.02, rest_offset=0.0),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
@@ -113,6 +114,7 @@ class DoubleAnymalCFlatEnvCfg(DirectMARLEnvCfg):
     action_scales = {"robot1": 0.5, "robot2": 0.5}
     observation_spaces = {"robot1": 48, "robot2": 48}
     state_space = -1
+    debug_vis = True
 
     # simulation
     sim: SimulationCfg = SimulationCfg(
