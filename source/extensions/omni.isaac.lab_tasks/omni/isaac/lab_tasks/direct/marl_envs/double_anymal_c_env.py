@@ -161,7 +161,9 @@ class SingleAgent:
         self._previous_actions[env_ids] = 0.0
         # Sample new commands
         self._commands[env_ids] = torch.zeros_like(self._commands[env_ids]).uniform_(-1.0, 1.0) # (N,3)
-        self._commands[env_ids, 2] = 0.0 # Force yaw to be zero
+        # self._commands[env_ids, 0] = 1.0 # Force yaw to be zero
+        # self._commands[env_ids, 1] = 0.1 # Force yaw to be zero
+        # self._commands[env_ids, 2] = 0.0 # Force yaw to be zero
         # Reset robot state
         joint_pos = self._robot.data.default_joint_pos[env_ids]
         joint_vel = self._robot.data.default_joint_vel[env_ids]
@@ -260,6 +262,13 @@ class DoubleAnymalCFlatEnv(DirectMARLEnv):
         return total_reward
 
     def _get_dones(self) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+        # t1 = self._r1.get_dones()
+        # t2 = self._r2.get_dones()
+        # tcombined = t1 | t2
+        # terminated = {
+        #     "robot1": tcombined,
+        #     "robot2": tcombined,
+        # }
         terminated = {
             "robot1": self._r1.get_dones(),
             "robot2": self._r2.get_dones(),

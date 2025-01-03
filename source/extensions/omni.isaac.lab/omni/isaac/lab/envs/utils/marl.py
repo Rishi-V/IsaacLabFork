@@ -76,6 +76,7 @@ def multi_agent_to_single_agent(env: DirectMARLEnv, state_as_observation: bool =
                 self.single_observation_space["policy"], self.num_envs
             )
             self.action_space = gym.vector.utils.batch_space(self.single_action_space, self.num_envs)
+            self.render_mode = self.env.render_mode
 
         def reset(self, seed: int | None = None, options: dict[str, Any] | None = None) -> tuple[VecEnvObs, dict]:
             obs, extras = self.env.reset(seed, options)
