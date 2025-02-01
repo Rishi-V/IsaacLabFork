@@ -155,8 +155,9 @@ class SingleAgent:
         return reward
     
     def get_dones(self) -> torch.Tensor:
-        net_contact_forces = self._contact_sensor.data.net_forces_w_history
-        died = torch.any(torch.max(torch.norm(net_contact_forces[:, :, self._base_id], dim=-1), dim=1)[0] > 1.0, dim=1) # Ignore this red squiggly
+        # net_contact_forces: torch.Tensor = self._contact_sensor.data.net_forces_w_history # Ignore this red squiggly (N,T,B,3)
+        # died = torch.any(torch.max(torch.norm(net_contact_forces[:, :, self._base_id], dim=-1), dim=1)[0] > 1.0, dim=1) 
+        died = self._robot.data.root_com_pos_w[:, 2] < 0.3
         return died
 
     def reset_idx(self, env_ids: torch.Tensor | None, scene: InteractiveScene):
@@ -293,17 +294,17 @@ class DoubleAnymalCFlatEnv(DirectMARLEnv):
         return total_reward
 
     def _get_dones(self) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
-        # t1 = self._r1.get_dones()
-        # t2 = self._r2.get_dones()
-        # tcombined = t1 | t2
-        # terminated = {
-        #     "robot1": tcombined,
-        #     "robot2": tcombined,
-        # }
+        t1 = self._r1.get_dones()
+        t2 = self._r2.get_dones()
+        tcombined = t1 | t2
         terminated = {
-            "robot1": self._r1.get_dones(),
-            "robot2": self._r2.get_dones(),
+            "robot1": tcombined,
+            "robot2": tcombined,
         }
+        # terminated = {
+        #     "robot1": self._r1.get_dones(),
+        #     "robot2": self._r2.get_dones(),
+        # }
         time_out = self.episode_length_buf >= self.max_episode_length - 1
         time_outs = {
             "robot1": time_out,

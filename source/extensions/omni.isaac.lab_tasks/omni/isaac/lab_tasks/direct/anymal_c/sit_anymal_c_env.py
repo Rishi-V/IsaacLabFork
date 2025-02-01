@@ -15,6 +15,8 @@ from omni.isaac.lab.sensors import ContactSensor, RayCaster
 
 from .sit_anymal_c_env_cfg import SitAnymalCFlatEnvCfg
 
+from omni.isaac.lab.markers import VisualizationMarkers
+from omni.isaac.lab.markers import CUBOID_MARKER_CFG  # isort: skip
 
 class SitAnymalCEnv(DirectRLEnv):
     cfg: SitAnymalCFlatEnvCfg
@@ -40,28 +42,30 @@ class SitAnymalCEnv(DirectRLEnv):
                 "orientation",
                 # "track_lin_vel_xy_exp",
                 # "track_ang_vel_z_exp",
-                # "lin_vel_z_l2",
-                # "ang_vel_xy_l2",
-                # "dof_torques_l2",
-                # "dof_acc_l2",
-                # "action_rate_l2",
+                "lin_vel_z_l2",
+                "ang_vel_xy_l2",
+                "dof_torques_l2",
+                "dof_acc_l2",
+                "action_rate_l2",
                 # "feet_air_time",
-                # "undesired_contacts",
-                # "flat_orientation_l2",
+                "undesired_contacts",
+                "flat_orientation_l2",
             ]
         }
         # Get specific body indices
         self._base_id, _ = self._contact_sensor.find_bodies("base")
         self._feet_ids, _ = self._contact_sensor.find_bodies(".*FOOT")
         self._undesired_contact_body_ids, _ = self._contact_sensor.find_bodies(".*THIGH")
+        
+        self.set_debug_vis(cfg.debug_vis)
 
     def _setup_scene(self):
         self._robot = Articulation(self.cfg.robot)
         self.scene.articulations["robot"] = self._robot
         self._contact_sensor = ContactSensor(self.cfg.contact_sensor)
         self.scene.sensors["contact_sensor"] = self._contact_sensor
-        self._height_scanner = RayCaster(self.cfg.height_scanner)
-        self.scene.sensors["height_scanner"] = self._height_scanner
+        # self._height_scanner = RayCaster(self.cfg.height_scanner)
+        # self.scene.sensors["height_scanner"] = self._height_scanner
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
         self._terrain = self.cfg.terrain.class_type(self.cfg.terrain)
@@ -81,14 +85,17 @@ class SitAnymalCEnv(DirectRLEnv):
 
     def _get_observations(self) -> dict:
         self._previous_actions = self._actions.clone()
-        # height_data = None
-        height_data = (
-            self._height_scanner.data.pos_w[:, 2].unsqueeze(1) - self._height_scanner.data.ray_hits_w[..., 2] - 0.5
-        ).clip(-1.0, 1.0)
+        height_data = None
+        # height_data = (
+        #     self._height_scanner.data.pos_w[:, 2].unsqueeze(1) - self._height_scanner.data.ray_hits_w[..., 2] - 0.5
+        # ).clip(-1.0, 1.0)
+        relative_pos = self._robot.data.root_com_pos_w - self._terrain.env_origins
         obs = torch.cat(
             [
                 tensor
                 for tensor in (
+                    # self._robot.data.root_com_pos_w,
+                    relative_pos,
                     self._robot.data.root_com_lin_vel_b,
                     self._robot.data.root_com_ang_vel_b,
                     self._robot.data.projected_gravity_b,
@@ -116,11 +123,6 @@ class SitAnymalCEnv(DirectRLEnv):
         orientation_tracking = orientation_error_abs(
             self._robot.data.root_com_ang_vel_w[:, 2], self._target_position[:, 2]
         )
-        rewards = {
-            "position_coarse": pos_tracking_coarse * self.cfg.position_coarse_reward_scale * self.step_dt,
-            "position_fine": pos_tracking_fine * self.cfg.position_fine_reward_scale * self.step_dt,
-            "orientation": orientation_tracking * self.cfg.orientation_reward_scale * self.step_dt,
-        }
         
         # # linear velocity tracking
         # lin_vel_error = torch.sum(
@@ -130,43 +132,49 @@ class SitAnymalCEnv(DirectRLEnv):
         # # yaw rate tracking
         # yaw_rate_error = torch.square(self._commands[:, 2] - self._robot.data.root_com_ang_vel_b[:, 2])
         # yaw_rate_error_mapped = torch.exp(-yaw_rate_error / 0.25)
-        # # z velocity tracking
-        # z_vel_error = torch.square(self._robot.data.root_com_lin_vel_b[:, 2])
-        # # angular velocity x/y
-        # ang_vel_error = torch.sum(torch.square(self._robot.data.root_com_ang_vel_b[:, :2]), dim=1)
-        # # joint torques
-        # joint_torques = torch.sum(torch.square(self._robot.data.applied_torque), dim=1)
-        # # joint acceleration
-        # joint_accel = torch.sum(torch.square(self._robot.data.joint_acc), dim=1)
-        # # action rate
-        # action_rate = torch.sum(torch.square(self._actions - self._previous_actions), dim=1)
-        # # feet air time
-        # first_contact = self._contact_sensor.compute_first_contact(self.step_dt)[:, self._feet_ids]
-        # last_air_time = self._contact_sensor.data.last_air_time[:, self._feet_ids]
+        # z velocity tracking
+        z_vel_error = torch.square(self._robot.data.root_com_lin_vel_b[:, 2])
+        # angular velocity x/y
+        ang_vel_error = torch.sum(torch.square(self._robot.data.root_com_ang_vel_b[:, :2]), dim=1)
+        # joint torques
+        joint_torques = torch.sum(torch.square(self._robot.data.applied_torque), dim=1)
+        # joint acceleration
+        joint_accel = torch.sum(torch.square(self._robot.data.joint_acc), dim=1)
+        # action rate
+        action_rate = torch.sum(torch.square(self._actions - self._previous_actions), dim=1)
+        # feet air time
+        first_contact = self._contact_sensor.compute_first_contact(self.step_dt)[:, self._feet_ids]
+        last_air_time = self._contact_sensor.data.last_air_time[:, self._feet_ids]
         # air_time = torch.sum((last_air_time - 0.5) * first_contact, dim=1) * (
         #     torch.norm(self._commands[:, :2], dim=1) > 0.1
         # )
-        # # undersired contacts
-        # net_contact_forces = self._contact_sensor.data.net_forces_w_history
+        # undersired contacts
+        net_contact_forces = self._contact_sensor.data.net_forces_w_history
+        is_contact = (
+            torch.max(torch.norm(net_contact_forces[:, :, self._undesired_contact_body_ids], dim=-1), dim=1)[0] > 1.0
+        )
         # is_contact = (
-        #     torch.max(torch.norm(net_contact_forces[:, :, self._undesired_contact_body_ids], dim=-1), dim=1)[0] > 1.0
+        #     torch.max(torch.norm(net_contact_forces[:, :, self._base_id], dim=-1), dim=1)[0] > 1.0
         # )
-        # contacts = torch.sum(is_contact, dim=1)
-        # # flat orientation
-        # flat_orientation = torch.sum(torch.square(self._robot.data.projected_gravity_b[:, :2]), dim=1)
+        contacts = torch.sum(is_contact, dim=1)
+        # flat orientation
+        flat_orientation = torch.sum(torch.square(self._robot.data.projected_gravity_b[:, :2]), dim=1)
 
-        # rewards = {
-        #     "track_lin_vel_xy_exp": lin_vel_error_mapped * self.cfg.lin_vel_reward_scale * self.step_dt,
-        #     "track_ang_vel_z_exp": yaw_rate_error_mapped * self.cfg.yaw_rate_reward_scale * self.step_dt,
-        #     "lin_vel_z_l2": z_vel_error * self.cfg.z_vel_reward_scale * self.step_dt,
-        #     "ang_vel_xy_l2": ang_vel_error * self.cfg.ang_vel_reward_scale * self.step_dt,
-        #     "dof_torques_l2": joint_torques * self.cfg.joint_torque_reward_scale * self.step_dt,
-        #     "dof_acc_l2": joint_accel * self.cfg.joint_accel_reward_scale * self.step_dt,
-        #     "action_rate_l2": action_rate * self.cfg.action_rate_reward_scale * self.step_dt,
-        #     "feet_air_time": air_time * self.cfg.feet_air_time_reward_scale * self.step_dt,
-        #     "undesired_contacts": contacts * self.cfg.undersired_contact_reward_scale * self.step_dt,
-        #     "flat_orientation_l2": flat_orientation * self.cfg.flat_orientation_reward_scale * self.step_dt,
-        # }
+        rewards = {
+            "position_coarse": pos_tracking_coarse * self.cfg.position_coarse_reward_scale * self.step_dt,
+            "position_fine": pos_tracking_fine * self.cfg.position_fine_reward_scale * self.step_dt,
+            "orientation": orientation_tracking * self.cfg.orientation_reward_scale * self.step_dt,
+            # "track_lin_vel_xy_exp": lin_vel_error_mapped * self.cfg.lin_vel_reward_scale * self.step_dt,
+            # "track_ang_vel_z_exp": yaw_rate_error_mapped * self.cfg.yaw_rate_reward_scale * self.step_dt,
+            "lin_vel_z_l2": z_vel_error * self.cfg.z_vel_reward_scale * self.step_dt,
+            "ang_vel_xy_l2": ang_vel_error * self.cfg.ang_vel_reward_scale * self.step_dt,
+            "dof_torques_l2": joint_torques * self.cfg.joint_torque_reward_scale * self.step_dt,
+            "dof_acc_l2": joint_accel * self.cfg.joint_accel_reward_scale * self.step_dt,
+            "action_rate_l2": action_rate * self.cfg.action_rate_reward_scale * self.step_dt,
+            # "feet_air_time": air_time * self.cfg.feet_air_time_reward_scale * self.step_dt,
+            "undesired_contacts": contacts * self.cfg.undersired_contact_reward_scale * self.step_dt,
+            "flat_orientation_l2": flat_orientation * self.cfg.flat_orientation_reward_scale * self.step_dt,
+        }
         reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
         # Logging
         for key, value in rewards.items():
@@ -192,8 +200,9 @@ class SitAnymalCEnv(DirectRLEnv):
         # Sample new commands
         # self._commands[env_ids] = torch.zeros_like(self._commands[env_ids]).uniform_(-1.0, 1.0)
         self._target_position[env_ids] = torch.zeros_like(self._target_position[env_ids]).uniform_(-1.0, 1.0)
-        self._target_position[env_ids, :2] *= 5
-        self._target_position[env_ids, 2] *= 3.14159
+        self._target_position[env_ids, :2] *= 2
+        # self._target_position[env_ids, :2] += self._terrain.env_origins[env_ids, :2] # Remember to add offset
+        # self._target_position[env_ids, 2] *= #3.14159
         # Reset robot state
         joint_pos = self._robot.data.default_joint_pos[env_ids]
         joint_vel = self._robot.data.default_joint_vel[env_ids]
@@ -214,14 +223,37 @@ class SitAnymalCEnv(DirectRLEnv):
         extras["Episode_Termination/base_contact"] = torch.count_nonzero(self.reset_terminated[env_ids]).item()
         extras["Episode_Termination/time_out"] = torch.count_nonzero(self.reset_time_outs[env_ids]).item()
         self.extras["log"].update(extras)
+        
+    def _set_debug_vis_impl(self, debug_vis: bool):
+        # create markers if necessary for the first time
+        if debug_vis:
+            if not hasattr(self, "goal_pos_visualizer"):
+                marker_cfg = CUBOID_MARKER_CFG.copy()
+                marker_cfg.markers["cuboid"].size = (0.2, 0.2, 0.2)
+                # -- goal pose
+                marker_cfg.prim_path = f"/Visuals/Command/goal_position"
+                self.goal_pos_visualizer = VisualizationMarkers(marker_cfg)
+            # set their visibility to true
+            self.goal_pos_visualizer.set_visibility(True)
+        else:
+            if hasattr(self, "goal_pos_visualizer"):
+                self.goal_pos_visualizer.set_visibility(False)
+        
+    def _debug_vis_callback(self, event):
+        # update the markers
+        xyz = self._target_position.clone()
+        xyz[:, :2] += self._terrain.env_origins[:, :2]
+        xyz[:, 2] = 0.5
+        self.goal_pos_visualizer.visualize(xyz)
 
 
-
+@torch.jit.script
 def position_error_tanh(cur_pos: torch.Tensor, target_pos: torch.Tensor, std: float) -> torch.Tensor:
     """Reward position tracking with tanh kernel."""
     distance = torch.norm(target_pos - cur_pos, dim=1)
     return 1 - torch.tanh(distance / std)
 
+@torch.jit.script
 def orientation_error_abs(cur_yaw: torch.Tensor, target_yaw: torch.Tensor) -> torch.Tensor:
     """Penalize orientation tracking with absolute error."""
     return torch.abs(cur_yaw - target_yaw)

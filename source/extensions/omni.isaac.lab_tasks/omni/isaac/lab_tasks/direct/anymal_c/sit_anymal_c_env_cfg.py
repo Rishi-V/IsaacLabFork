@@ -26,27 +26,28 @@ from omni.isaac.lab.terrains.config.rough import ROUGH_TERRAINS_CFG  # isort: sk
 class EventCfg:
     """Configuration for randomization."""
 
-    physics_material = EventTerm(
-        func=mdp.randomize_rigid_body_material,
-        mode="startup",
-        params={
-            "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
-            "static_friction_range": (0.8, 0.8),
-            "dynamic_friction_range": (0.6, 0.6),
-            "restitution_range": (0.0, 0.0),
-            "num_buckets": 64,
-        },
-    )
+    # physics_material = EventTerm(
+    #     func=mdp.randomize_rigid_body_material,
+    #     mode="startup",
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
+    #         "static_friction_range": (0.8, 0.8),
+    #         "dynamic_friction_range": (0.6, 0.6),
+    #         "restitution_range": (0.0, 0.0),
+    #         "num_buckets": 64,
+    #     },
+    # )
 
-    add_base_mass = EventTerm(
-        func=mdp.randomize_rigid_body_mass,
-        mode="startup",
-        params={
-            "asset_cfg": SceneEntityCfg("robot", body_names="base"),
-            "mass_distribution_params": (-5.0, 5.0),
-            "operation": "add",
-        },
-    )
+    # add_base_mass = EventTerm(
+    #     func=mdp.randomize_rigid_body_mass,
+    #     mode="startup",
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot", body_names="base"),
+    #         "mass_distribution_params": (-5.0, 5.0),
+    #         "operation": "add",
+    #     },
+    # )
+    pass
 
 
 @configclass
@@ -56,8 +57,9 @@ class SitAnymalCFlatEnvCfg(DirectRLEnvCfg):
     decimation = 4
     action_scale = 0.5
     action_space = 12
-    observation_space = 235 #48
+    observation_space = 51 # 235 #48
     state_space = 0
+    debug_vis = True
 
     # simulation
     sim: SimulationCfg = SimulationCfg(
@@ -98,26 +100,26 @@ class SitAnymalCFlatEnvCfg(DirectRLEnvCfg):
         prim_path="/World/envs/env_.*/Robot/.*", history_length=3, update_period=0.005, track_air_time=True
     )
     # we add a height scanner for perceptive locomotion
-    height_scanner = RayCasterCfg(
-        prim_path="/World/envs/env_.*/Robot/base",
-        offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
-        attach_yaw_only=True,
-        pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),
-        debug_vis=True,
-        mesh_prim_paths=["/World/ground"],
-    )
+    # height_scanner = RayCasterCfg(
+    #     prim_path="/World/envs/env_.*/Robot/base",
+    #     offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
+    #     attach_yaw_only=True,
+    #     pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),
+    #     debug_vis=True,
+    #     mesh_prim_paths=["/World/ground"],
+    # )
 
     # reward scales
+    position_coarse_reward_scale = 10
+    position_fine_reward_scale = 10
+    orientation_reward_scale = 0 #-0.2
     # lin_vel_reward_scale = 1.0
     # yaw_rate_reward_scale = 0.5
-    # z_vel_reward_scale = -2.0
-    # ang_vel_reward_scale = -0.05
-    # joint_torque_reward_scale = -2.5e-5
-    # joint_accel_reward_scale = -2.5e-7
-    # action_rate_reward_scale = -0.01
-    # feet_air_time_reward_scale = 0.5
-    # undersired_contact_reward_scale = -1.0
-    # flat_orientation_reward_scale = -5.0
-    position_coarse_reward_scale = 0.5
-    position_fine_reward_scale = 0.5
-    orientation_reward_scale = -0.2
+    z_vel_reward_scale = -2.0
+    ang_vel_reward_scale = -0.05
+    joint_torque_reward_scale = -2.5e-5
+    joint_accel_reward_scale = -2.5e-7
+    action_rate_reward_scale = -0.01
+    feet_air_time_reward_scale = 0.5
+    undersired_contact_reward_scale = -1.0
+    flat_orientation_reward_scale = -5.0
