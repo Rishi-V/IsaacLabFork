@@ -33,10 +33,10 @@ def customCommands(env, env_ids: torch.Tensor | None):
     env._commands[env_ids] = torch.zeros_like(env._commands[env_ids]).uniform_(-1.0, 1.0)
     env._commands[env_ids,3] = 0.6
     
-    num_envs_to_sample = int(0.3 * len(env_ids))
+    num_envs_to_sample = int(0.2 * len(env_ids))
     sampled_envs = torch.randperm(len(env_ids))[:num_envs_to_sample]
     env._commands[env_ids[sampled_envs], :3] = 0.0
-    env._commands[env_ids[sampled_envs], 3] = 0.1
+    env._commands[env_ids[sampled_envs], 3] = 0.05
 
 @configclass
 class EventCfg:
@@ -82,6 +82,7 @@ class ModAnymalCFlatEnvCfg(DirectRLEnvCfg):
     action_scale = 0.5
     action_space = 12
     observation_space = 49 #RVMod: Was 48, now +1 as adding additional command
+    # observation_space = 236
     state_space = 0
     debug_vis = True
 
@@ -123,6 +124,20 @@ class ModAnymalCFlatEnvCfg(DirectRLEnvCfg):
     contact_sensor: ContactSensorCfg = ContactSensorCfg(
         prim_path="/World/envs/env_.*/Robot/.*", history_length=3, update_period=0.005, track_air_time=True
     )
+    
+    # we add a height scanner for perceptive locomotion
+    # height_scanner = RayCasterCfg(
+    #     prim_path="/World/envs/env_.*/Robot/base",
+    #     offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
+    #     attach_yaw_only=True,
+    #     pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),
+    #     debug_vis=True,
+    #     mesh_prim_paths=["/World/ground"],
+    # )
+    
+    # static other anymal
+    # static_anymal: ArticulationCfg = ANYMAL_C_CFG.replace(prim_path="/World/envs/env_.*/StaticAnymal")
+
 
     # reward scales
     lin_vel_reward_scale = 1.0

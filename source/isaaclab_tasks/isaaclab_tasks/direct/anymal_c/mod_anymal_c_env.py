@@ -74,6 +74,10 @@ class ModAnymalCEnv(DirectRLEnv):
         #     # we add a height scanner for perceptive locomotion
         #     self._height_scanner = RayCaster(self.cfg.height_scanner)
         #     self.scene.sensors["height_scanner"] = self._height_scanner
+        # Add height scanner
+        # self._height_scanner = RayCaster(self.cfg.height_scanner)
+        # self.scene.sensors["height_scanner"] = self._height_scanner
+        
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
         self._terrain = self.cfg.terrain.class_type(self.cfg.terrain)
@@ -92,28 +96,39 @@ class ModAnymalCEnv(DirectRLEnv):
 
     def _get_observations(self) -> dict:
         self._previous_actions = self._actions.clone()
-        height_data = None
+        # height_data = None
         # if isinstance(self.cfg, AnymalCRoughEnvCfg):
         #     height_data = (
         #         self._height_scanner.data.pos_w[:, 2].unsqueeze(1) - self._height_scanner.data.ray_hits_w[..., 2] - 0.5
         #     ).clip(-1.0, 1.0)
-        obs = torch.cat(
-            [
-                tensor
-                for tensor in (
-                    self._robot.data.root_lin_vel_b,
+        # height_data = (
+        #     self._height_scanner.data.pos_w[:, 2].unsqueeze(1) - self._height_scanner.data.ray_hits_w[..., 2] - 0.5
+        # ).clip(-1.0, 1.0)
+        obs = torch.cat([self._robot.data.root_lin_vel_b,
                     self._robot.data.root_ang_vel_b,
                     self._robot.data.projected_gravity_b,
                     self._commands,
                     self._robot.data.joint_pos - self._robot.data.default_joint_pos,
                     self._robot.data.joint_vel,
-                    height_data,
-                    self._actions,
-                )
-                if tensor is not None
-            ],
-            dim=-1,
-        )
+                    # height_data,
+                    self._actions], dim=-1)
+        # obs = torch.cat(
+        #     [
+        #         tensor
+        #         for tensor in (
+        #             self._robot.data.root_lin_vel_b,
+        #             self._robot.data.root_ang_vel_b,
+        #             self._robot.data.projected_gravity_b,
+        #             self._commands,
+        #             self._robot.data.joint_pos - self._robot.data.default_joint_pos,
+        #             self._robot.data.joint_vel,
+        #             height_data,
+        #             self._actions,
+        #         )
+        #         if tensor is not None
+        #     ],
+        #     dim=-1,
+        # )
         observations = {"policy": obs}
         return observations
 
@@ -189,10 +204,10 @@ class ModAnymalCEnv(DirectRLEnv):
         # Sample new commands
         self._commands[env_ids] = torch.zeros_like(self._commands[env_ids]).uniform_(-1.0, 1.0)
         self._commands[env_ids,3] = 0.6
-        num_envs_to_sample = int(0.3 * len(env_ids))
+        num_envs_to_sample = int(0.2 * len(env_ids))
         sampled_envs = torch.randperm(len(env_ids))[:num_envs_to_sample]
         self._commands[env_ids[sampled_envs], :3] = 0.0
-        self._commands[env_ids[sampled_envs], 3] = 0.1
+        self._commands[env_ids[sampled_envs], 3] = 0.05
         # Reset robot state
         joint_pos = self._robot.data.default_joint_pos[env_ids]
         joint_vel = self._robot.data.default_joint_vel[env_ids]
@@ -245,7 +260,7 @@ class ModAnymalCEnv(DirectRLEnv):
         
     def _debug_vis_callback(self, event):
         target_loc = self._robot.data.root_com_pos_w.clone()  # (N,3)
-        target_loc[:, 2] += 0.2
+        target_loc[:, 2] += 0.5
         
         # RVMod: Add orientation visualization
         # xdir = self._commands[:, 0]
