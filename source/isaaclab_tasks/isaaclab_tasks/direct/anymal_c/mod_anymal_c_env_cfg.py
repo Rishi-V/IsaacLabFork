@@ -32,39 +32,43 @@ def customCommands(env, env_ids: torch.Tensor | None):
             env_ids = env._robot._ALL_INDICES
     env._commands[env_ids] = torch.zeros_like(env._commands[env_ids]).uniform_(-1.0, 1.0)
     env._commands[env_ids,3] = 0.6
+    
+    num_envs_to_sample = int(0.3 * len(env_ids))
+    sampled_envs = torch.randperm(len(env_ids))[:num_envs_to_sample]
+    env._commands[env_ids[sampled_envs], :3] = 0.0
+    env._commands[env_ids[sampled_envs], 3] = 0.1
 
 @configclass
 class EventCfg:
     """Configuration for randomization."""
 
-    physics_material = EventTerm(
-        func=mdp.randomize_rigid_body_material,
-        mode="startup",
-        params={
-            "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
-            "static_friction_range": (0.8, 0.8),
-            "dynamic_friction_range": (0.6, 0.6),
-            "restitution_range": (0.0, 0.0),
-            "num_buckets": 64,
-        },
-    )
+    # physics_material = EventTerm(
+    #     func=mdp.randomize_rigid_body_material,
+    #     mode="startup",
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
+    #         "static_friction_range": (0.8, 0.8),
+    #         "dynamic_friction_range": (0.6, 0.6),
+    #         "restitution_range": (0.0, 0.0),
+    #         "num_buckets": 64,
+    #     },
+    # )
 
-    add_base_mass = EventTerm(
-        func=mdp.randomize_rigid_body_mass,
-        mode="startup",
-        params={
-            "asset_cfg": SceneEntityCfg("robot", body_names="base"),
-            "mass_distribution_params": (-5.0, 5.0),
-            "operation": "add",
-        },
-    )
+    # add_base_mass = EventTerm(
+    #     func=mdp.randomize_rigid_body_mass,
+    #     mode="startup",
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot", body_names="base"),
+    #         "mass_distribution_params": (-5.0, 5.0),
+    #         "operation": "add",
+    #     },
+    # )
     
-    # from .mod_anymal_c_command import customCommands
     change_command = EventTerm(
         func=customCommands,
         mode="interval",
-        is_global_time=False,
-        interval_range_s = (4.9, 5.1),
+        is_global_time=True,
+        interval_range_s = (10.9, 11.1),
         params={}
     )
     
@@ -79,6 +83,7 @@ class ModAnymalCFlatEnvCfg(DirectRLEnvCfg):
     action_space = 12
     observation_space = 49 #RVMod: Was 48, now +1 as adding additional command
     state_space = 0
+    debug_vis = True
 
     # simulation
     sim: SimulationCfg = SimulationCfg(
@@ -123,7 +128,7 @@ class ModAnymalCFlatEnvCfg(DirectRLEnvCfg):
     lin_vel_reward_scale = 1.0
     yaw_rate_reward_scale = 0.5
     # z_vel_reward_scale = 2.0 # Remove z-axis velocity reward
-    z_pos_reward_scale = -2.0 # RVMod: Want to track z-axis position
+    z_pos_reward_scale = -5.0 # RVMod: Want to track z-axis position
     ang_vel_reward_scale = -0.05
     joint_torque_reward_scale = -2.5e-5
     joint_accel_reward_scale = -2.5e-7

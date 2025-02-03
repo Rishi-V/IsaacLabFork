@@ -15,7 +15,14 @@ from isaaclab.sensors import ContactSensor, RayCaster
 
 from .mod_anymal_c_env_cfg import ModAnymalCFlatEnvCfg
 
+## Visualizations
+from isaaclab.markers import VisualizationMarkers
+from isaaclab.markers.config import RED_ARROW_X_MARKER_CFG, BLUE_ARROW_X_MARKER_CFG
+import isaaclab.utils.math as math_utils
+# from isaaclab.envs.mdp.commands.velocity_command import UniformVelocityCommand # Contains example of marker
 
+"""python scripts/reinforcement_learning/skrl/train.py --task=Isaac-Velocity-Mod-Flat-Anymal-C-Direct-v0 \
+--headless --video --video_length 200 --video_interval 1000 --num_envs 1024"""
 class ModAnymalCEnv(DirectRLEnv):
     cfg: ModAnymalCFlatEnvCfg
 
@@ -56,6 +63,7 @@ class ModAnymalCEnv(DirectRLEnv):
         self._base_id, _ = self._contact_sensor.find_bodies("base")
         self._feet_ids, _ = self._contact_sensor.find_bodies(".*FOOT")
         self._undesired_contact_body_ids, _ = self._contact_sensor.find_bodies(".*THIGH")
+        self.set_debug_vis(debug_vis=cfg.debug_vis)
 
     def _setup_scene(self):
         self._robot = Articulation(self.cfg.robot)
@@ -181,6 +189,10 @@ class ModAnymalCEnv(DirectRLEnv):
         # Sample new commands
         self._commands[env_ids] = torch.zeros_like(self._commands[env_ids]).uniform_(-1.0, 1.0)
         self._commands[env_ids,3] = 0.6
+        num_envs_to_sample = int(0.3 * len(env_ids))
+        sampled_envs = torch.randperm(len(env_ids))[:num_envs_to_sample]
+        self._commands[env_ids[sampled_envs], :3] = 0.0
+        self._commands[env_ids[sampled_envs], 3] = 0.1
         # Reset robot state
         joint_pos = self._robot.data.default_joint_pos[env_ids]
         joint_vel = self._robot.data.default_joint_vel[env_ids]
@@ -211,3 +223,76 @@ class ModAnymalCEnv(DirectRLEnv):
         self._commands[successful_sits,3] = 0.6
         
         pass
+
+
+    def _set_debug_vis_impl(self, debug_vis: bool):
+        # create markers if necessary for the first tome
+        if debug_vis:
+            if not hasattr(self, "command_visualizer"):
+                marker_cfg = BLUE_ARROW_X_MARKER_CFG.copy()
+                marker_cfg.markers["arrow"].scale = (0.5, 0.5, 0.5)
+                # marker_cfg.markers["arrow"].size = (0.05, 0.05, 0.05)
+                # marker_cfg = CUBOID_MARKER_CFG.copy()
+                # marker_cfg.markers["cuboid"].size = (0.05, 0.05, 0.05)
+                # -- goal pose
+                marker_cfg.prim_path = f"/Visuals/Command/robot/goal_position"
+                self.command_visualizer = VisualizationMarkers(marker_cfg)
+            # set their visibility to true
+            self.command_visualizer.set_visibility(True)
+        else:
+            if hasattr(self, "command_visualizer"):
+                self.command_visualizer.set_visibility(False)
+        
+    def _debug_vis_callback(self, event):
+        target_loc = self._robot.data.root_com_pos_w.clone()  # (N,3)
+        target_loc[:, 2] += 0.2
+        
+        # RVMod: Add orientation visualization
+        # xdir = self._commands[:, 0]
+        # ydir = self._commands[:, 1]
+        # zdir = self._commands[:, 3] # 0.6 for standing, 0.0 for sitting
+        # zdir = torch.where(self._commands[:, 3] == 0.6, 0.0, -1.0) # 0.0 for standing, 1.0 for sitting
+        # quat = direction_to_quaternion(xdir, ydir, zdir)
+        tmp = self._commands[:, [0,1,3]].clone()
+        tmp[:, 2] = torch.where(tmp[:, 2] == 0.6, 0.0, -1.0)
+        arrow_scale, arrow_quat = self._resolve_xyz_velocity_to_arrow(tmp)
+        self.command_visualizer.visualize(translations=target_loc, orientations=arrow_quat, scales=arrow_scale)
+        
+
+    def _resolve_xyz_velocity_to_arrow(self, xyz_velocity: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Converts the XYZ base velocity command to arrow direction rotation."""
+        # obtain default scale of the marker
+        default_scale = self.command_visualizer.cfg.markers["arrow"].scale
+        # arrow-scale
+        arrow_scale = torch.tensor(default_scale, device=self.device).repeat(xyz_velocity.shape[0], 1)
+        arrow_scale[:, 0] *= torch.linalg.norm(xyz_velocity, dim=1) * 3.0
+        # arrow-direction
+        heading_angle = torch.atan2(xyz_velocity[:, 1], xyz_velocity[:, 0])
+        zeros = torch.zeros_like(heading_angle)
+        pitch_angle = torch.atan2(-xyz_velocity[:, 2], torch.linalg.norm(xyz_velocity[:,:2], dim=1)) # Note adding a negative sign to z-axis
+        arrow_quat = math_utils.quat_from_euler_xyz(zeros, pitch_angle, heading_angle)
+        # convert everything back from base to world frame
+        base_quat_w = self._robot.data.root_quat_w
+        arrow_quat = math_utils.quat_mul(base_quat_w, arrow_quat)
+
+        return arrow_scale, arrow_quat
+        
+def direction_to_quaternion(xdir, ydir, zdir):
+    """
+    Converts a direction vector (x, y, z) to a quaternion.
+    
+    Args:
+    xdir (torch.Tensor): x direction component.
+    ydir (torch.Tensor): y direction component.
+    zdir (torch.Tensor): z direction component.
+    
+    Returns:
+    torch.Tensor: Quaternion representing the orientation.
+    """
+    quat = torch.zeros((xdir.shape[0], 4), device=xdir.device)
+    quat[:, 0] = 2 * (xdir * ydir + zdir)
+    quat[:, 1] = 1 - 2 * (xdir ** 2 + zdir ** 2)
+    quat[:, 2] = 2 * (ydir * zdir - xdir)
+    quat[:, 3] = 1
+    
+    return quat
