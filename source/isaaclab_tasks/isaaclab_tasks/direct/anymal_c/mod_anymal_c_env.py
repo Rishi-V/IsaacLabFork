@@ -19,11 +19,10 @@ from .mod_anymal_c_env_cfg import ModAnymalCFlatEnvCfg
 from isaaclab.markers import VisualizationMarkers
 from isaaclab.markers.config import RED_ARROW_X_MARKER_CFG, BLUE_ARROW_X_MARKER_CFG
 import isaaclab.utils.math as math_utils
-import pdb
 # from isaaclab.envs.mdp.commands.velocity_command import UniformVelocityCommand # Contains example of marker
 
 """python scripts/reinforcement_learning/skrl/train.py --task=Isaac-Velocity-Mod-Flat-Anymal-C-Direct-v0 \
---headless --video --video_length 200 --video_interval 1000 --num_envs 1024"""
+--headless --video --video_length=200 --video_interval=1000 --num_envs=1024"""
 
 class CustomCommandManager:
     def __init__(self, num_envs: int, device: torch.device):
@@ -31,7 +30,8 @@ class CustomCommandManager:
         self._device = device
         self.SITTING_HEIGHT = 0.1
         self.WALKING_HEIGHT = 0.6
-        self.PROB_SIT = 0.1
+        self.PROB_SIT = 0.8
+        self.MAX_Z_VEL = 0.1
         
         self._high_level_commands = torch.zeros(size=(self._num_envs,), device=self._device) # (N); -1=sit, 1=unsit, 0=walk
         self._raw_commands = torch.zeros(size=(self._num_envs, 4), device=self._device) # (N,4); (x,y,yaw,z) velocities
@@ -52,31 +52,36 @@ class CustomCommandManager:
         
         ### Walking commands
         walking_envs = self._high_level_commands == 0 # (N)
-        self._time_doing_action[walking_envs] += 1
+        lin_vel_error = torch.sum(torch.square(self._raw_commands[:, :2] - robot.data.root_lin_vel_b[:, :2]), dim=1) < 0.1 # (N)
+        yaw_rate_error = torch.square(self._raw_commands[:, 2] - robot.data.root_ang_vel_b[:, 2]) < 0.1 # (N)
+        successful_walks = torch.logical_and(lin_vel_error, yaw_rate_error) # (N)
+        self._time_doing_action[successful_walks] += 1
         
         ### Update high_level actions
-        new_sitting_envs = torch.logical_and(sitting_envs, self._time_doing_action > 100) # (N)
-        new_unsitting_envs = torch.logical_and(unsitting_envs, self._time_doing_action > 100) # (N)
-        new_walking_envs = torch.logical_and(walking_envs, self._time_doing_action > 500) # (N)
-        self._high_level_commands[new_sitting_envs] = 1
-        self._high_level_commands[new_unsitting_envs] = 0
-        self._high_level_commands[new_walking_envs] = -1
-        self._time_doing_action[new_sitting_envs] = 0
-        self._time_doing_action[new_unsitting_envs] = 0
-        self._time_doing_action[new_walking_envs] = 0
+        finished_sitting_envs = torch.logical_and(sitting_envs, self._time_doing_action > 100) # (N)
+        finished_unsitting_envs = torch.logical_and(unsitting_envs, self._time_doing_action > 100) # (N)
+        finished_walking_envs = torch.logical_and(walking_envs, self._time_doing_action > 500) # (N)
+        self._high_level_commands[finished_sitting_envs] = 1 # Make them unsit
+        self._high_level_commands[finished_unsitting_envs] = 0 # Make them walk
+        self._high_level_commands[finished_walking_envs] = -1 # Make them sit
+        self._time_doing_action[finished_sitting_envs] = 0
+        self._time_doing_action[finished_unsitting_envs] = 0
+        self._time_doing_action[finished_walking_envs] = 0
         
         ### Update raw commands
         # Sitting raw commands
         sitting_envs = self._high_level_commands == -1 # (N)
         error = self.SITTING_HEIGHT - robot.data.root_com_pos_w[sitting_envs,2] # negative if robot is above sitting height
-        self._raw_commands[sitting_envs,3] = torch.clamp(error*0.01, -0.1, 0.1)
+        self._raw_commands[sitting_envs,:3] = 0.0
+        self._raw_commands[sitting_envs,3] = torch.clamp(error, -self.MAX_Z_VEL, self.MAX_Z_VEL)
         # Unsitting raw commands
         unsitting_envs = self._high_level_commands == 1 # (N)
         error = self.WALKING_HEIGHT - robot.data.root_com_pos_w[unsitting_envs,2] # positive if robot is below walking height
-        self._raw_commands[unsitting_envs,3] = torch.clamp(error*0.01, -0.1, 0.1)
+        self._raw_commands[unsitting_envs,:3] = 0.0
+        self._raw_commands[unsitting_envs,3] = torch.clamp(error, -self.MAX_Z_VEL, self.MAX_Z_VEL)
         # Walking raw commands
         # new_walking_envs = torch.logical_and(walking_envs, self._time_doing_action > 100) # (N)
-        new_walking_envs = torch.where(new_walking_envs)[0] # Needs to be list of indices
+        new_walking_envs = torch.where(finished_unsitting_envs)[0] # Needs to be list of indices
         self.set_random_walk_commands(new_walking_envs)
         
     def reset_commands(self, env_ids: torch.Tensor, robot: Articulation):
@@ -94,9 +99,9 @@ class CustomCommandManager:
         self.set_random_walk_commands(walking_inds)
         
         ## Set sitting commands
-        self._high_level_commands[sitting_inds] = 1
+        self._high_level_commands[sitting_inds] = -1
         self._raw_commands[sitting_inds, :3] = 0.0
-        self._raw_commands[sitting_inds, 3] = -0.01
+        self._raw_commands[sitting_inds, 3] = -self.MAX_Z_VEL
         # error = self.SITTING_HEIGHT - robot.data.root_com_pos_w[sitting_inds,2] # negative if robot is above sitting height
         # self._raw_commands[sitting_envs,3] = torch.clamp(error, -0.1, 0.1)
         
@@ -112,6 +117,9 @@ class CustomCommandManager:
         
     def get_commands(self) -> torch.Tensor:
         return self._raw_commands
+    
+    def get_high_level_commands(self) -> torch.Tensor:
+        return self._high_level_commands
         
 
 class ModAnymalCEnv(DirectRLEnv):
@@ -217,6 +225,7 @@ class ModAnymalCEnv(DirectRLEnv):
         yaw_rate_error_mapped = torch.exp(-yaw_rate_error / 0.25)
         # z velocity tracking
         z_vel_error = torch.square(self._robot.data.root_lin_vel_b[:, 2] - self._commands[:, 3]) # RVMod
+        z_vel_error_mapped = torch.exp(-z_vel_error / 0.25) # RVMod
         # RVMod: z-axis position tracking
         # z_pos_error = torch.square(self._robot.data.root_com_pos_w[:, 2] - self._commands[:, 3])
         # angular velocity x/y
@@ -245,7 +254,8 @@ class ModAnymalCEnv(DirectRLEnv):
         rewards = {
             "track_lin_vel_xy_exp": lin_vel_error_mapped * self.cfg.lin_vel_reward_scale * self.step_dt,
             "track_ang_vel_z_exp": yaw_rate_error_mapped * self.cfg.yaw_rate_reward_scale * self.step_dt,
-            "lin_vel_z_l2": z_vel_error * self.cfg.z_vel_reward_scale * self.step_dt,
+            "lin_vel_z_l2": z_vel_error_mapped * self.cfg.z_vel_reward_scale * self.step_dt, # RVMod
+            # "lin_vel_z_l2": z_vel_error * self.cfg.z_vel_reward_scale * self.step_dt,
             # "track_z_pos_l2": z_pos_error * self.cfg.z_pos_reward_scale * self.step_dt, # RVMod: z-axis position tracking
             "ang_vel_xy_l2": ang_vel_error * self.cfg.ang_vel_reward_scale * self.step_dt,
             "dof_torques_l2": joint_torques * self.cfg.joint_torque_reward_scale * self.step_dt,
@@ -307,7 +317,7 @@ class ModAnymalCEnv(DirectRLEnv):
         
         ### Sample new commands
         self.command_manager.reset_commands(env_ids, self._robot)
-        self._commands = self.command_manager.get_commands()
+        # self._commands = self.command_manager.get_commands()
         
         # Logging
         extras = dict()
@@ -349,31 +359,40 @@ class ModAnymalCEnv(DirectRLEnv):
 
 
     def _set_debug_vis_impl(self, debug_vis: bool):
-        # create markers if necessary for the first tome
+        # create markers if necessary for the first time
         if debug_vis:
             if not hasattr(self, "command_visualizer"):
-                marker_cfg = BLUE_ARROW_X_MARKER_CFG.copy()
+                marker_cfg = BLUE_ARROW_X_MARKER_CFG.copy() # Blue denotes moving
                 marker_cfg.markers["arrow"].scale = (0.5, 0.5, 0.5)
+                marker_cfg.prim_path = f"/Visuals/Command/robot/blue_arrow"
+                self.command_visualizer = VisualizationMarkers(marker_cfg)
+                
+                marker_cfg = RED_ARROW_X_MARKER_CFG.copy() # Red denotes sitting
+                marker_cfg.markers["arrow"].scale = (0.5, 0.5, 0.5)
+                marker_cfg.prim_path = f"/Visuals/Command/robot/red_arrow"
+                self.sit_unsit_visualizer = VisualizationMarkers(marker_cfg)
                 # marker_cfg.markers["arrow"].size = (0.05, 0.05, 0.05)
                 # marker_cfg = CUBOID_MARKER_CFG.copy()
                 # marker_cfg.markers["cuboid"].size = (0.05, 0.05, 0.05)
                 # -- goal pose
-                marker_cfg.prim_path = f"/Visuals/Command/robot/goal_position"
-                self.command_visualizer = VisualizationMarkers(marker_cfg)
             # set their visibility to true
             self.command_visualizer.set_visibility(True)
+            self.sit_unsit_visualizer.set_visibility(True)
         else:
             if hasattr(self, "command_visualizer"):
                 self.command_visualizer.set_visibility(False)
+                self.sit_unsit_visualizer.set_visibility(False)
         
     def _debug_vis_callback(self, event):
         target_loc = self._robot.data.root_com_pos_w.clone()  # (N,3)
         target_loc[:, 2] += 0.5
         
-        tmp = self._commands[:, [0,1,3]].clone()
-        tmp[:, 2] = torch.where(tmp[:, 2] == 0.6, 0.0, -1.0)
+        tmp = self.command_manager.get_commands()[:, [0,1,3]].clone()
         arrow_scale, arrow_quat = self._resolve_xyz_velocity_to_arrow(tmp)
-        self.command_visualizer.visualize(translations=target_loc, orientations=arrow_quat, scales=arrow_scale)
+        walking_envs = self.command_manager.get_high_level_commands() == 0
+        sit_or_unsit_envs = self.command_manager.get_high_level_commands() != 0
+        self.command_visualizer.visualize(translations=target_loc[walking_envs], orientations=arrow_quat[walking_envs], scales=arrow_scale[walking_envs])
+        self.sit_unsit_visualizer.visualize(translations=target_loc[sit_or_unsit_envs], orientations=arrow_quat[sit_or_unsit_envs], scales=arrow_scale[sit_or_unsit_envs])
         
 
     def _resolve_xyz_velocity_to_arrow(self, xyz_velocity: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -382,7 +401,7 @@ class ModAnymalCEnv(DirectRLEnv):
         default_scale = self.command_visualizer.cfg.markers["arrow"].scale
         # arrow-scale
         arrow_scale = torch.tensor(default_scale, device=self.device).repeat(xyz_velocity.shape[0], 1)
-        arrow_scale[:, 0] *= torch.linalg.norm(xyz_velocity, dim=1) * 3.0
+        arrow_scale[:, 0] *= torch.clamp(torch.linalg.norm(xyz_velocity, dim=1), min=0.5) * 3.0
         # arrow-direction
         heading_angle = torch.atan2(xyz_velocity[:, 1], xyz_velocity[:, 0])
         zeros = torch.zeros_like(heading_angle)

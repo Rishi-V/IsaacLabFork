@@ -64,14 +64,14 @@ class EventCfg:
     #     },
     # )
     
-    change_command = EventTerm(
-        func=customCommands,
-        mode="interval",
-        is_global_time=True,
-        interval_range_s = (10.9, 11.1),
-        params={}
-    )
-    
+    # change_command = EventTerm(
+    #     func=customCommands,
+    #     mode="interval",
+    #     is_global_time=True,
+    #     interval_range_s = (10.9, 11.1),
+    #     params={}
+    # )
+    pass
 
 
 @configclass
