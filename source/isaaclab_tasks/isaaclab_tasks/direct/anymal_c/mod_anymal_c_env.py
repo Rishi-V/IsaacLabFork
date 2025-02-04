@@ -19,10 +19,101 @@ from .mod_anymal_c_env_cfg import ModAnymalCFlatEnvCfg
 from isaaclab.markers import VisualizationMarkers
 from isaaclab.markers.config import RED_ARROW_X_MARKER_CFG, BLUE_ARROW_X_MARKER_CFG
 import isaaclab.utils.math as math_utils
+import pdb
 # from isaaclab.envs.mdp.commands.velocity_command import UniformVelocityCommand # Contains example of marker
 
 """python scripts/reinforcement_learning/skrl/train.py --task=Isaac-Velocity-Mod-Flat-Anymal-C-Direct-v0 \
 --headless --video --video_length 200 --video_interval 1000 --num_envs 1024"""
+
+class CustomCommandManager:
+    def __init__(self, num_envs: int, device: torch.device):
+        self._num_envs = num_envs
+        self._device = device
+        self.SITTING_HEIGHT = 0.1
+        self.WALKING_HEIGHT = 0.6
+        self.PROB_SIT = 0.1
+        
+        self._high_level_commands = torch.zeros(size=(self._num_envs,), device=self._device) # (N); -1=sit, 1=unsit, 0=walk
+        self._raw_commands = torch.zeros(size=(self._num_envs, 4), device=self._device) # (N,4); (x,y,yaw,z) velocities
+        self._time_doing_action = torch.zeros(size=(self._num_envs,), device=self._device) # (N); Time spent doing action
+        
+    def update_commands(self, robot: Articulation):
+        ### Sitting commands
+        sitting_envs = self._high_level_commands == -1 # (N)
+        sitting_robots = torch.abs(robot.data.root_com_pos_w[:,2] - self.SITTING_HEIGHT) < 0.1 # (N)
+        successful_sits = torch.logical_and(sitting_envs, sitting_robots) # (N)
+        self._time_doing_action[successful_sits] += 1
+        
+        ### Unsitting commands
+        unsitting_envs = self._high_level_commands == 1 # (N)
+        unsitting_robots = torch.abs(robot.data.root_com_pos_w[:,2] - self.WALKING_HEIGHT) < 0.1 # (N)
+        successful_unsits = torch.logical_and(unsitting_envs, unsitting_robots) # (N)
+        self._time_doing_action[successful_unsits] += 1
+        
+        ### Walking commands
+        walking_envs = self._high_level_commands == 0 # (N)
+        self._time_doing_action[walking_envs] += 1
+        
+        ### Update high_level actions
+        new_sitting_envs = torch.logical_and(sitting_envs, self._time_doing_action > 100) # (N)
+        new_unsitting_envs = torch.logical_and(unsitting_envs, self._time_doing_action > 100) # (N)
+        new_walking_envs = torch.logical_and(walking_envs, self._time_doing_action > 500) # (N)
+        self._high_level_commands[new_sitting_envs] = 1
+        self._high_level_commands[new_unsitting_envs] = 0
+        self._high_level_commands[new_walking_envs] = -1
+        self._time_doing_action[new_sitting_envs] = 0
+        self._time_doing_action[new_unsitting_envs] = 0
+        self._time_doing_action[new_walking_envs] = 0
+        
+        ### Update raw commands
+        # Sitting raw commands
+        sitting_envs = self._high_level_commands == -1 # (N)
+        error = self.SITTING_HEIGHT - robot.data.root_com_pos_w[sitting_envs,2] # negative if robot is above sitting height
+        self._raw_commands[sitting_envs,3] = torch.clamp(error*0.01, -0.1, 0.1)
+        # Unsitting raw commands
+        unsitting_envs = self._high_level_commands == 1 # (N)
+        error = self.WALKING_HEIGHT - robot.data.root_com_pos_w[unsitting_envs,2] # positive if robot is below walking height
+        self._raw_commands[unsitting_envs,3] = torch.clamp(error*0.01, -0.1, 0.1)
+        # Walking raw commands
+        # new_walking_envs = torch.logical_and(walking_envs, self._time_doing_action > 100) # (N)
+        new_walking_envs = torch.where(new_walking_envs)[0] # Needs to be list of indices
+        self.set_random_walk_commands(new_walking_envs)
+        
+    def reset_commands(self, env_ids: torch.Tensor, robot: Articulation):
+        """env_ids: (E)
+        Note: env_ids should be a tensor of indices, not boolean mask"""
+        ## Split new envs into walking and sitting
+        prob_sit = torch.rand(size=(len(env_ids),), device=self._device) # (E)
+        bool_list = torch.where(prob_sit < self.PROB_SIT, 0, 1) # (E)
+        walking_inds = env_ids[torch.where(bool_list == 1)[0]] # (E)
+        sitting_inds = env_ids[torch.where(bool_list == 0)[0]] # (E)
+        # self._high_level_commands[walking_inds] = torch.where(prob_sit < self.PROB_SIT, -1, 0) # (E)
+        
+        ## Set random walking commands
+        self._high_level_commands[walking_inds] = 0
+        self.set_random_walk_commands(walking_inds)
+        
+        ## Set sitting commands
+        self._high_level_commands[sitting_inds] = 1
+        self._raw_commands[sitting_inds, :3] = 0.0
+        self._raw_commands[sitting_inds, 3] = -0.01
+        # error = self.SITTING_HEIGHT - robot.data.root_com_pos_w[sitting_inds,2] # negative if robot is above sitting height
+        # self._raw_commands[sitting_envs,3] = torch.clamp(error, -0.1, 0.1)
+        
+        ## Reset time doing action
+        self._time_doing_action[env_ids] = 0
+        
+    def set_random_walk_commands(self, env_ids: torch.Tensor):
+        """env_ids: (E)
+        Note: env_ids should be a tensor of indices, not boolean mask"""
+        
+        self._raw_commands[env_ids] = torch.zeros(size=(len(env_ids), 4), device=self._device).uniform_(-1.0, 1.0)
+        self._raw_commands[env_ids,3] = 0.0 # z-axis velocity is 0.0
+        
+    def get_commands(self) -> torch.Tensor:
+        return self._raw_commands
+        
+
 class ModAnymalCEnv(DirectRLEnv):
     cfg: ModAnymalCFlatEnvCfg
 
@@ -37,10 +128,12 @@ class ModAnymalCEnv(DirectRLEnv):
 
         # X/Y linear velocity and yaw angular velocity commands
         # RVMod: Add z-axis target position command
-        self._commands = torch.zeros(self.num_envs, 4, device=self.device)
-        self._commands[:,3] = 0.6
-        self._SIT_HEIGHT = 0.1
-        self._timesteps_before_switch = torch.zeros(self.num_envs, 4, device=self.device)+1000 # Start at 1000
+        # self._commands = torch.zeros(self.num_envs, 4, device=self.device)
+        # self._commands[:,3] = 0.6
+        # self._SIT_HEIGHT = 0.1
+        # self._timesteps_before_switch = torch.zeros(self.num_envs, 4, device=self.device)+1000 # Start at 1000
+        self.command_manager = CustomCommandManager(self.num_envs, self.device)
+        self._commands = self.command_manager.get_commands()
 
         # Logging
         self._episode_sums = {
@@ -48,8 +141,8 @@ class ModAnymalCEnv(DirectRLEnv):
             for key in [
                 "track_lin_vel_xy_exp",
                 "track_ang_vel_z_exp",
-                # "lin_vel_z_l2",
-                "track_z_pos_l2", # RVMod: z-axis position tracking
+                "lin_vel_z_l2",
+                # "track_z_pos_l2", # RVMod: z-axis position tracking
                 "ang_vel_xy_l2",
                 "dof_torques_l2",
                 "dof_acc_l2",
@@ -75,8 +168,8 @@ class ModAnymalCEnv(DirectRLEnv):
         # self.scene.sensors["height_scanner"] = self._height_scanner
         
         ### Add static anymal
-        self._static_anymal = Articulation(self.cfg.static_anymal)
-        self.scene.articulations["static_anymal"] = self._static_anymal
+        # self._static_anymal = Articulation(self.cfg.static_anymal)
+        # self.scene.articulations["static_anymal"] = self._static_anymal
         
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
@@ -95,6 +188,7 @@ class ModAnymalCEnv(DirectRLEnv):
         self._robot.set_joint_position_target(self._processed_actions)
 
     def _get_observations(self) -> dict:
+        self.command_manager.update_commands(self._robot) # Update actions before getting observations
         self._previous_actions = self._actions.clone()
         # height_data = (
         #     self._height_scanner.data.pos_w[:, 2].unsqueeze(1) - self._height_scanner.data.ray_hits_w[..., 2] - 0.5
@@ -102,27 +196,29 @@ class ModAnymalCEnv(DirectRLEnv):
         obs = torch.cat([self._robot.data.root_lin_vel_b, # (N,3)
                     self._robot.data.root_ang_vel_b, # (N,3)
                     self._robot.data.projected_gravity_b, # (N,3)
-                    self._commands, # (N,4)
+                    # self._commands, # (N,4)
+                    self.command_manager.get_commands(), # (N,4)
                     self._robot.data.joint_pos - self._robot.data.default_joint_pos, # (N,12)
                     self._robot.data.joint_vel, # (N,12)
                     # height_data,
                     self._actions, # (N,12)
-                    self.get_static_anymal_obs(), # (N,37)
+                    # self.get_static_anymal_obs(), # (N,37)
                     ], dim=-1)
         observations = {"policy": obs}
         return observations
 
     def _get_rewards(self) -> torch.Tensor:
+        self._commands = self.command_manager.get_commands()
         # linear velocity tracking
         lin_vel_error = torch.sum(torch.square(self._commands[:, :2] - self._robot.data.root_lin_vel_b[:, :2]), dim=1)
         lin_vel_error_mapped = torch.exp(-lin_vel_error / 0.25)
         # yaw rate tracking
         yaw_rate_error = torch.square(self._commands[:, 2] - self._robot.data.root_ang_vel_b[:, 2])
         yaw_rate_error_mapped = torch.exp(-yaw_rate_error / 0.25)
-        # # z velocity tracking
-        # z_vel_error = torch.square(self._robot.data.root_lin_vel_b[:, 2])
+        # z velocity tracking
+        z_vel_error = torch.square(self._robot.data.root_lin_vel_b[:, 2] - self._commands[:, 3]) # RVMod
         # RVMod: z-axis position tracking
-        z_pos_error = torch.square(self._robot.data.root_com_pos_w[:, 2] - self._commands[:, 3])
+        # z_pos_error = torch.square(self._robot.data.root_com_pos_w[:, 2] - self._commands[:, 3])
         # angular velocity x/y
         ang_vel_error = torch.sum(torch.square(self._robot.data.root_ang_vel_b[:, :2]), dim=1)
         # joint torques
@@ -149,8 +245,8 @@ class ModAnymalCEnv(DirectRLEnv):
         rewards = {
             "track_lin_vel_xy_exp": lin_vel_error_mapped * self.cfg.lin_vel_reward_scale * self.step_dt,
             "track_ang_vel_z_exp": yaw_rate_error_mapped * self.cfg.yaw_rate_reward_scale * self.step_dt,
-            # "lin_vel_z_l2": z_vel_error * self.cfg.z_vel_reward_scale * self.step_dt,
-            "track_z_pos_l2": z_pos_error * self.cfg.z_pos_reward_scale * self.step_dt, # RVMod: z-axis position tracking
+            "lin_vel_z_l2": z_vel_error * self.cfg.z_vel_reward_scale * self.step_dt,
+            # "track_z_pos_l2": z_pos_error * self.cfg.z_pos_reward_scale * self.step_dt, # RVMod: z-axis position tracking
             "ang_vel_xy_l2": ang_vel_error * self.cfg.ang_vel_reward_scale * self.step_dt,
             "dof_torques_l2": joint_torques * self.cfg.joint_torque_reward_scale * self.step_dt,
             "dof_acc_l2": joint_accel * self.cfg.joint_accel_reward_scale * self.step_dt,
@@ -169,7 +265,7 @@ class ModAnymalCEnv(DirectRLEnv):
         time_out = self.episode_length_buf >= self.max_episode_length - 1
         # net_contact_forces = self._contact_sensor.data.net_forces_w_history
         # died = torch.any(torch.max(torch.norm(net_contact_forces[:, :, self._base_id], dim=-1), dim=1)[0] > 1.0, dim=1)
-        tipping_threshold = 0.5  # Define a tipping threshold
+        tipping_threshold = 0.8  # Define a tipping threshold, note that torch.norm(projected_gravity_b) is 1.0
         died = torch.norm(self._robot.data.projected_gravity_b[:, :2], dim=1) > tipping_threshold
         return died, time_out
 
@@ -184,8 +280,10 @@ class ModAnymalCEnv(DirectRLEnv):
         self._actions[env_ids] = 0.0
         self._previous_actions[env_ids] = 0.0
         # Sample new commands
-        self._commands[env_ids] = torch.zeros_like(self._commands[env_ids]).uniform_(-1.0, 1.0)
-        self._commands[env_ids,3] = 0.6
+        # self._commands[env_ids] = torch.zeros_like(self._commands[env_ids]).uniform_(-1.0, 1.0)
+        # self._commands[env_ids,3] = 0.6
+        # self.command_manager.reset_commands(env_ids, self._robot)
+        # self._commands = self.command_manager.get_commands()
         # num_envs_to_sample = int(0.2 * len(env_ids))
         # sampled_envs = torch.randperm(len(env_ids))[:num_envs_to_sample]
         # self._commands[env_ids[sampled_envs], :3] = 0.0
@@ -200,12 +298,16 @@ class ModAnymalCEnv(DirectRLEnv):
         self._robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
         ### Reset static anymal
         # random_position = torch.rand(size=(len(env_ids), 3), device=self.device) * torch.tensor([1.0, 1.0, 0.0], device=self.device)
-        default_root_state = self._static_anymal.data.default_root_state[env_ids]
-        default_root_state[:, :3] += self._terrain.env_origins[env_ids] #+ random_position
-        self._static_anymal.write_root_pose_to_sim(default_root_state[:, :7], env_ids)
-        joint_vel = self._static_anymal.data.default_joint_vel[env_ids]
-        self._static_anymal.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
-        self._static_anymal.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
+        # default_root_state = self._static_anymal.data.default_root_state[env_ids]
+        # default_root_state[:, :3] += self._terrain.env_origins[env_ids] #+ random_position
+        # self._static_anymal.write_root_pose_to_sim(default_root_state[:, :7], env_ids)
+        # joint_vel = self._static_anymal.data.default_joint_vel[env_ids]
+        # self._static_anymal.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
+        # self._static_anymal.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
+        
+        ### Sample new commands
+        self.command_manager.reset_commands(env_ids, self._robot)
+        self._commands = self.command_manager.get_commands()
         
         # Logging
         extras = dict()
@@ -245,16 +347,6 @@ class ModAnymalCEnv(DirectRLEnv):
                     dim=-1) # (3+3+3+4+12+12) = (N,37)
         return obs # (N,37)
 
-    def update_commands(self):
-        # normal_envs = torch.where(self._commands[:,3] == 0.6) # (N1=number of environments where z-axis target position is 0.6)
-        sit_command_envs = (self._commands[:, 3] == self._SIT_HEIGHT) # Binary vector of size N
-        sit_actual_envs = (self._robot.data.root_com_pos_w[:, 2] < self._SIT_HEIGHT) # Binary vector of size N
-        successful_sits = torch.logical_and(sit_command_envs, sit_actual_envs) # Binary vector of size N
-        # Update z-axis target position command for environments where sit was successful
-        self._commands[successful_sits,3] = 0.6
-        
-        pass
-
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         # create markers if necessary for the first tome
@@ -278,12 +370,6 @@ class ModAnymalCEnv(DirectRLEnv):
         target_loc = self._robot.data.root_com_pos_w.clone()  # (N,3)
         target_loc[:, 2] += 0.5
         
-        # RVMod: Add orientation visualization
-        # xdir = self._commands[:, 0]
-        # ydir = self._commands[:, 1]
-        # zdir = self._commands[:, 3] # 0.6 for standing, 0.0 for sitting
-        # zdir = torch.where(self._commands[:, 3] == 0.6, 0.0, -1.0) # 0.0 for standing, 1.0 for sitting
-        # quat = direction_to_quaternion(xdir, ydir, zdir)
         tmp = self._commands[:, [0,1,3]].clone()
         tmp[:, 2] = torch.where(tmp[:, 2] == 0.6, 0.0, -1.0)
         arrow_scale, arrow_quat = self._resolve_xyz_velocity_to_arrow(tmp)
@@ -308,22 +394,3 @@ class ModAnymalCEnv(DirectRLEnv):
 
         return arrow_scale, arrow_quat
         
-def direction_to_quaternion(xdir, ydir, zdir):
-    """
-    Converts a direction vector (x, y, z) to a quaternion.
-    
-    Args:
-    xdir (torch.Tensor): x direction component.
-    ydir (torch.Tensor): y direction component.
-    zdir (torch.Tensor): z direction component.
-    
-    Returns:
-    torch.Tensor: Quaternion representing the orientation.
-    """
-    quat = torch.zeros((xdir.shape[0], 4), device=xdir.device)
-    quat[:, 0] = 2 * (xdir * ydir + zdir)
-    quat[:, 1] = 1 - 2 * (xdir ** 2 + zdir ** 2)
-    quat[:, 2] = 2 * (ydir * zdir - xdir)
-    quat[:, 3] = 1
-    
-    return quat

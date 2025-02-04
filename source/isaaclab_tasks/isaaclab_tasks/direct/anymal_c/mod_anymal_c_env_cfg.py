@@ -81,7 +81,8 @@ class ModAnymalCFlatEnvCfg(DirectRLEnvCfg):
     decimation = 4
     action_scale = 0.5
     action_space = 12
-    observation_space = 48+37+1 #RVMod: Was 48, now +1 as adding additional command
+    # observation_space = 48+37+1 #RVMod: Was 48, now +1 as adding additional command
+    observation_space = 48+1 #RVMod: Was 48, now +1 as adding additional command
     # observation_space = 236 # If including raycaster (cannot though)
     state_space = 0
     debug_vis = True
@@ -117,7 +118,7 @@ class ModAnymalCFlatEnvCfg(DirectRLEnvCfg):
     scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=4096, env_spacing=4.0, replicate_physics=True)
 
     # events
-    events: EventCfg = EventCfg()
+    # events: EventCfg = EventCfg()
 
     # robot
     robot: ArticulationCfg = ANYMAL_C_CFG.replace(prim_path="/World/envs/env_.*/Robot")
@@ -126,8 +127,8 @@ class ModAnymalCFlatEnvCfg(DirectRLEnvCfg):
     )
     
     # static other anymal
-    static_anymal: ArticulationCfg = ANYMAL_C_CFG.replace(prim_path="/World/envs/env_.*/StaticAnymal")
-    static_anymal.init_state.pos = (0.0, 0.8, 0.6)
+    # static_anymal: ArticulationCfg = ANYMAL_C_CFG.replace(prim_path="/World/envs/env_.*/StaticAnymal")
+    # static_anymal.init_state.pos = (0.0, 0.8, 0.6)
     
     # we add a height scanner for perceptive locomotion
     # height_scanner = RayCasterCfg(
@@ -144,8 +145,8 @@ class ModAnymalCFlatEnvCfg(DirectRLEnvCfg):
     # reward scales
     lin_vel_reward_scale = 1.0
     yaw_rate_reward_scale = 0.5
-    # z_vel_reward_scale = 2.0 # Remove z-axis velocity reward
-    z_pos_reward_scale = -5.0 # RVMod: Want to track z-axis position
+    z_vel_reward_scale = 2.0 # Reward z-axis velocity reward
+    # z_pos_reward_scale = -5.0 # RVMod: Want to track z-axis position
     ang_vel_reward_scale = -0.05
     joint_torque_reward_scale = -2.5e-5
     joint_accel_reward_scale = -2.5e-7
