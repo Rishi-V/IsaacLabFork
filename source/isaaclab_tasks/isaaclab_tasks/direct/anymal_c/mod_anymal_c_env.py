@@ -30,10 +30,10 @@ class ModAnymalCEnv(DirectRLEnv):
         super().__init__(cfg, render_mode, **kwargs)
 
         # Joint position command (deviation from default joint positions)
-        self._actions = torch.zeros(self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device)
+        self._actions = torch.zeros(self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device) # (N,12)
         self._previous_actions = torch.zeros(
             self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device
-        )
+        ) # (N,12)
 
         # X/Y linear velocity and yaw angular velocity commands
         # RVMod: Add z-axis target position command
@@ -70,13 +70,13 @@ class ModAnymalCEnv(DirectRLEnv):
         self.scene.articulations["robot"] = self._robot
         self._contact_sensor = ContactSensor(self.cfg.contact_sensor)
         self.scene.sensors["contact_sensor"] = self._contact_sensor
-        # if isinstance(self.cfg, AnymalCRoughEnvCfg):
-        #     # we add a height scanner for perceptive locomotion
-        #     self._height_scanner = RayCaster(self.cfg.height_scanner)
-        #     self.scene.sensors["height_scanner"] = self._height_scanner
         # Add height scanner
         # self._height_scanner = RayCaster(self.cfg.height_scanner)
         # self.scene.sensors["height_scanner"] = self._height_scanner
+        
+        ### Add static anymal
+        self._static_anymal = Articulation(self.cfg.static_anymal)
+        self.scene.articulations["static_anymal"] = self._static_anymal
         
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
@@ -96,39 +96,19 @@ class ModAnymalCEnv(DirectRLEnv):
 
     def _get_observations(self) -> dict:
         self._previous_actions = self._actions.clone()
-        # height_data = None
-        # if isinstance(self.cfg, AnymalCRoughEnvCfg):
-        #     height_data = (
-        #         self._height_scanner.data.pos_w[:, 2].unsqueeze(1) - self._height_scanner.data.ray_hits_w[..., 2] - 0.5
-        #     ).clip(-1.0, 1.0)
         # height_data = (
         #     self._height_scanner.data.pos_w[:, 2].unsqueeze(1) - self._height_scanner.data.ray_hits_w[..., 2] - 0.5
         # ).clip(-1.0, 1.0)
-        obs = torch.cat([self._robot.data.root_lin_vel_b,
-                    self._robot.data.root_ang_vel_b,
-                    self._robot.data.projected_gravity_b,
-                    self._commands,
-                    self._robot.data.joint_pos - self._robot.data.default_joint_pos,
-                    self._robot.data.joint_vel,
+        obs = torch.cat([self._robot.data.root_lin_vel_b, # (N,3)
+                    self._robot.data.root_ang_vel_b, # (N,3)
+                    self._robot.data.projected_gravity_b, # (N,3)
+                    self._commands, # (N,4)
+                    self._robot.data.joint_pos - self._robot.data.default_joint_pos, # (N,12)
+                    self._robot.data.joint_vel, # (N,12)
                     # height_data,
-                    self._actions], dim=-1)
-        # obs = torch.cat(
-        #     [
-        #         tensor
-        #         for tensor in (
-        #             self._robot.data.root_lin_vel_b,
-        #             self._robot.data.root_ang_vel_b,
-        #             self._robot.data.projected_gravity_b,
-        #             self._commands,
-        #             self._robot.data.joint_pos - self._robot.data.default_joint_pos,
-        #             self._robot.data.joint_vel,
-        #             height_data,
-        #             self._actions,
-        #         )
-        #         if tensor is not None
-        #     ],
-        #     dim=-1,
-        # )
+                    self._actions, # (N,12)
+                    self.get_static_anymal_obs(), # (N,37)
+                    ], dim=-1)
         observations = {"policy": obs}
         return observations
 
@@ -187,8 +167,10 @@ class ModAnymalCEnv(DirectRLEnv):
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         time_out = self.episode_length_buf >= self.max_episode_length - 1
-        net_contact_forces = self._contact_sensor.data.net_forces_w_history
-        died = torch.any(torch.max(torch.norm(net_contact_forces[:, :, self._base_id], dim=-1), dim=1)[0] > 1.0, dim=1)
+        # net_contact_forces = self._contact_sensor.data.net_forces_w_history
+        # died = torch.any(torch.max(torch.norm(net_contact_forces[:, :, self._base_id], dim=-1), dim=1)[0] > 1.0, dim=1)
+        tipping_threshold = 0.5  # Define a tipping threshold
+        died = torch.norm(self._robot.data.projected_gravity_b[:, :2], dim=1) > tipping_threshold
         return died, time_out
 
     def _reset_idx(self, env_ids: torch.Tensor | None):
@@ -204,11 +186,11 @@ class ModAnymalCEnv(DirectRLEnv):
         # Sample new commands
         self._commands[env_ids] = torch.zeros_like(self._commands[env_ids]).uniform_(-1.0, 1.0)
         self._commands[env_ids,3] = 0.6
-        num_envs_to_sample = int(0.2 * len(env_ids))
-        sampled_envs = torch.randperm(len(env_ids))[:num_envs_to_sample]
-        self._commands[env_ids[sampled_envs], :3] = 0.0
-        self._commands[env_ids[sampled_envs], 3] = 0.05
-        # Reset robot state
+        # num_envs_to_sample = int(0.2 * len(env_ids))
+        # sampled_envs = torch.randperm(len(env_ids))[:num_envs_to_sample]
+        # self._commands[env_ids[sampled_envs], :3] = 0.0
+        # self._commands[env_ids[sampled_envs], 3] = 0.05
+        ### Reset robot state
         joint_pos = self._robot.data.default_joint_pos[env_ids]
         joint_vel = self._robot.data.default_joint_vel[env_ids]
         default_root_state = self._robot.data.default_root_state[env_ids]
@@ -216,6 +198,15 @@ class ModAnymalCEnv(DirectRLEnv):
         self._robot.write_root_pose_to_sim(default_root_state[:, :7], env_ids)
         self._robot.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
         self._robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
+        ### Reset static anymal
+        # random_position = torch.rand(size=(len(env_ids), 3), device=self.device) * torch.tensor([1.0, 1.0, 0.0], device=self.device)
+        default_root_state = self._static_anymal.data.default_root_state[env_ids]
+        default_root_state[:, :3] += self._terrain.env_origins[env_ids] #+ random_position
+        self._static_anymal.write_root_pose_to_sim(default_root_state[:, :7], env_ids)
+        joint_vel = self._static_anymal.data.default_joint_vel[env_ids]
+        self._static_anymal.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
+        self._static_anymal.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
+        
         # Logging
         extras = dict()
         for key in self._episode_sums.keys():
@@ -228,6 +219,31 @@ class ModAnymalCEnv(DirectRLEnv):
         extras["Episode_Termination/base_contact"] = torch.count_nonzero(self.reset_terminated[env_ids]).item()
         extras["Episode_Termination/time_out"] = torch.count_nonzero(self.reset_time_outs[env_ids]).item()
         self.extras["log"].update(extras)
+
+
+    def get_static_anymal_obs(self) -> torch.Tensor:
+        static_pos = self._static_anymal.data.root_com_pos_w # (N,3)
+        static_lin_vel = self._static_anymal.data.root_lin_vel_b # (N,3)
+        static_ang_vel = self._static_anymal.data.root_ang_vel_b # (N,3)
+        static_joint_pos = self._static_anymal.data.joint_pos - self._static_anymal.data.default_joint_pos # (N,12)
+        static_joint_vel = self._static_anymal.data.joint_vel # (N,12)
+        
+        cur_pos = self._robot.data.root_com_pos_w # (N,3)
+        cur_orienation = self._robot.data.root_quat_w # (N,4)
+        static_orientation = self._static_anymal.data.root_quat_w # (N,4)
+        relative_pos = static_pos - cur_pos # (N,3)
+        relative_orientation = math_utils.quat_mul(cur_orienation, math_utils.quat_inv(static_orientation)) # (N,4)
+        relative_lin_vel = static_lin_vel - self._robot.data.root_lin_vel_b # (N,3)
+        relative_ang_vel = static_ang_vel - self._robot.data.root_ang_vel_b # (N,3)
+        
+        obs = torch.cat([relative_pos, # (N,3)
+                        relative_lin_vel, # (N,3)
+                        relative_ang_vel, # (N,3)
+                        relative_orientation, # (N,4)
+                        static_joint_pos, # (N,12)
+                        static_joint_vel], # (N,12)
+                    dim=-1) # (3+3+3+4+12+12) = (N,37)
+        return obs # (N,37)
 
     def update_commands(self):
         # normal_envs = torch.where(self._commands[:,3] == 0.6) # (N1=number of environments where z-axis target position is 0.6)

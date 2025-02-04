@@ -33,10 +33,10 @@ def customCommands(env, env_ids: torch.Tensor | None):
     env._commands[env_ids] = torch.zeros_like(env._commands[env_ids]).uniform_(-1.0, 1.0)
     env._commands[env_ids,3] = 0.6
     
-    num_envs_to_sample = int(0.2 * len(env_ids))
-    sampled_envs = torch.randperm(len(env_ids))[:num_envs_to_sample]
-    env._commands[env_ids[sampled_envs], :3] = 0.0
-    env._commands[env_ids[sampled_envs], 3] = 0.05
+    # num_envs_to_sample = int(0.2 * len(env_ids))
+    # sampled_envs = torch.randperm(len(env_ids))[:num_envs_to_sample]
+    # env._commands[env_ids[sampled_envs], :3] = 0.0
+    # env._commands[env_ids[sampled_envs], 3] = 0.05
 
 @configclass
 class EventCfg:
@@ -81,8 +81,8 @@ class ModAnymalCFlatEnvCfg(DirectRLEnvCfg):
     decimation = 4
     action_scale = 0.5
     action_space = 12
-    observation_space = 49 #RVMod: Was 48, now +1 as adding additional command
-    # observation_space = 236
+    observation_space = 48+37+1 #RVMod: Was 48, now +1 as adding additional command
+    # observation_space = 236 # If including raycaster (cannot though)
     state_space = 0
     debug_vis = True
 
@@ -125,6 +125,10 @@ class ModAnymalCFlatEnvCfg(DirectRLEnvCfg):
         prim_path="/World/envs/env_.*/Robot/.*", history_length=3, update_period=0.005, track_air_time=True
     )
     
+    # static other anymal
+    static_anymal: ArticulationCfg = ANYMAL_C_CFG.replace(prim_path="/World/envs/env_.*/StaticAnymal")
+    static_anymal.init_state.pos = (0.0, 0.8, 0.6)
+    
     # we add a height scanner for perceptive locomotion
     # height_scanner = RayCasterCfg(
     #     prim_path="/World/envs/env_.*/Robot/base",
@@ -132,11 +136,9 @@ class ModAnymalCFlatEnvCfg(DirectRLEnvCfg):
     #     attach_yaw_only=True,
     #     pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),
     #     debug_vis=True,
-    #     mesh_prim_paths=["/World/ground"],
+    #     # mesh_prim_paths=["/World/ground"],
+    #     mesh_prim_paths=["/World/envs/env_.*/StaticAnymal"],
     # )
-    
-    # static other anymal
-    # static_anymal: ArticulationCfg = ANYMAL_C_CFG.replace(prim_path="/World/envs/env_.*/StaticAnymal")
 
 
     # reward scales
@@ -149,5 +151,5 @@ class ModAnymalCFlatEnvCfg(DirectRLEnvCfg):
     joint_accel_reward_scale = -2.5e-7
     action_rate_reward_scale = -0.01
     feet_air_time_reward_scale = 0.5
-    undesired_contact_reward_scale = -1.0
+    undesired_contact_reward_scale = -10.0 # RVMod: Originally -1.0
     flat_orientation_reward_scale = -5.0
