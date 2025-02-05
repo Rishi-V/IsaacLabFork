@@ -75,6 +75,35 @@ class EventCfg:
 
 
 @configclass
+class WalkingRewardCfg:
+    # reward scales
+    lin_vel_reward_scale = 1.0
+    yaw_rate_reward_scale = 0.5
+    z_vel_reward_scale = 2.0 # Reward z-axis velocity reward
+    ang_vel_reward_scale = -0.05
+    joint_torque_reward_scale = -2.5e-5
+    joint_accel_reward_scale = -2.5e-7
+    action_rate_reward_scale = -0.01
+    feet_air_time_reward_scale = 0.5
+    undesired_contact_reward_scale = -10.0 # RVMod: Originally -1.0
+    flat_orientation_reward_scale = -5.0
+    
+@configclass
+class SitUnsitRewardCfg:
+    # reward scales
+    lin_vel_reward_scale = 0.5
+    yaw_rate_reward_scale = 0.5
+    z_track_reward_scale = 10.0
+    ang_vel_reward_scale = -0.05
+    joint_torque_reward_scale = -2.5e-5
+    joint_accel_reward_scale = -2.5e-7
+    action_rate_reward_scale = -0.01
+    undesired_contact_reward_scale = -1.0 # RVMod: Originally -1.0
+    flat_orientation_reward_scale = -5.0
+    
+
+
+@configclass
 class ModAnymalCFlatEnvCfg(DirectRLEnvCfg):
     # env
     episode_length_s = 20.0
@@ -143,14 +172,16 @@ class ModAnymalCFlatEnvCfg(DirectRLEnvCfg):
 
 
     # reward scales
-    lin_vel_reward_scale = 1.0
-    yaw_rate_reward_scale = 0.5
-    z_vel_reward_scale = 2.0 # Reward z-axis velocity reward
-    # z_pos_reward_scale = -5.0 # RVMod: Want to track z-axis position
-    ang_vel_reward_scale = -0.05
-    joint_torque_reward_scale = -2.5e-5
-    joint_accel_reward_scale = -2.5e-7
-    action_rate_reward_scale = -0.01
-    feet_air_time_reward_scale = 0.5
-    undesired_contact_reward_scale = -10.0 # RVMod: Originally -1.0
-    flat_orientation_reward_scale = -5.0
+    # lin_vel_reward_scale = 1.0
+    # yaw_rate_reward_scale = 0.5
+    # z_vel_reward_scale = 2.0 # Reward z-axis velocity reward
+    # # z_pos_reward_scale = -5.0 # RVMod: Want to track z-axis position
+    # ang_vel_reward_scale = -0.05
+    # joint_torque_reward_scale = -2.5e-5
+    # joint_accel_reward_scale = -2.5e-7
+    # action_rate_reward_scale = -0.01
+    # feet_air_time_reward_scale = 0.5
+    # undesired_contact_reward_scale = -10.0 # RVMod: Originally -1.0
+    # flat_orientation_reward_scale = -5.0
+    walking_reward_cfg: WalkingRewardCfg = WalkingRewardCfg()
+    situnsit_reward_cfg: SitUnsitRewardCfg = SitUnsitRewardCfg()

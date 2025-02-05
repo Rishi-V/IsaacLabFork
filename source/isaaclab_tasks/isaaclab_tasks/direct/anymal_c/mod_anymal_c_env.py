@@ -13,7 +13,7 @@ from isaaclab.assets import Articulation
 from isaaclab.envs import DirectRLEnv
 from isaaclab.sensors import ContactSensor, RayCaster
 
-from .mod_anymal_c_env_cfg import ModAnymalCFlatEnvCfg
+from .mod_anymal_c_env_cfg import ModAnymalCFlatEnvCfg, WalkingRewardCfg, SitUnsitRewardCfg
 
 ## Visualizations
 from isaaclab.markers import VisualizationMarkers
@@ -28,9 +28,9 @@ class CustomCommandManager:
     def __init__(self, num_envs: int, device: torch.device):
         self._num_envs = num_envs
         self._device = device
-        self.SITTING_HEIGHT = 0.1
+        self.SITTING_HEIGHT = 0.05
         self.WALKING_HEIGHT = 0.6
-        self.PROB_SIT = 0.8
+        self.PROB_SIT = 1.0
         self.MAX_Z_VEL = 0.1
         
         self._high_level_commands = torch.zeros(size=(self._num_envs,), device=self._device) # (N); -1=sit, 1=unsit, 0=walk
@@ -40,13 +40,13 @@ class CustomCommandManager:
     def update_commands(self, robot: Articulation):
         ### Sitting commands
         sitting_envs = self._high_level_commands == -1 # (N)
-        sitting_robots = torch.abs(robot.data.root_com_pos_w[:,2] - self.SITTING_HEIGHT) < 0.1 # (N)
+        sitting_robots = torch.abs(robot.data.root_com_pos_w[:,2] - self.SITTING_HEIGHT) < 0.05 # (N)
         successful_sits = torch.logical_and(sitting_envs, sitting_robots) # (N)
         self._time_doing_action[successful_sits] += 1
         
         ### Unsitting commands
         unsitting_envs = self._high_level_commands == 1 # (N)
-        unsitting_robots = torch.abs(robot.data.root_com_pos_w[:,2] - self.WALKING_HEIGHT) < 0.1 # (N)
+        unsitting_robots = torch.abs(robot.data.root_com_pos_w[:,2] - self.WALKING_HEIGHT) < 0.05 # (N)
         successful_unsits = torch.logical_and(unsitting_envs, unsitting_robots) # (N)
         self._time_doing_action[successful_unsits] += 1
         
@@ -122,6 +122,113 @@ class CustomCommandManager:
         return self._high_level_commands
         
 
+class CustomRewardManager:
+    def __init__(self, num_envs: int, device: torch.device, command_manager: CustomCommandManager,
+                 walk_reward_weights: WalkingRewardCfg, sit_unsit_reward_weights: SitUnsitRewardCfg):
+        self._num_envs = num_envs
+        self._device = device
+        self._rewards = torch.zeros(size=(self._num_envs,), device=self._device)
+        self._command_manager = command_manager
+        self.walk_reward_weights = walk_reward_weights
+        self.sit_unsit_reward_weights = sit_unsit_reward_weights
+        self.episode_sums = {}
+        
+        walking_reward_components = ["track_lin_vel_xy_exp", "track_ang_vel_z_exp", "lin_vel_z_l2", "ang_vel_xy_l2", "dof_torques_l2",
+                                        "dof_acc_l2", "action_rate_l2", "feet_air_time", "undesired_contacts", "flat_orientation_l2"]
+        for key in walking_reward_components:
+            self.episode_sums[f"walking/{key}"] = torch.zeros(size=(self._num_envs,), device=self._device)
+        sit_unsit_reward_components = ["track_lin_vel_xy_exp", "track_ang_vel_z_exp", "track_vel_z_l2", "ang_vel_xy_l2", "dof_torques_l2",
+                                        "dof_acc_l2", "action_rate_l2", "undesired_contacts", "flat_orientation_l2"]
+        for key in sit_unsit_reward_components:
+            self.episode_sums[f"sit_or_unsit/{key}"] = torch.zeros(size=(self._num_envs,), device=self._device)
+    
+    def compute_rewards(self, robot: Articulation, 
+                                actions: torch.Tensor, previous_actions: torch.Tensor,
+                                contact_sensor: ContactSensor,
+                                step_dt,
+                                feet_ids, undesired_contact_body_ids: list[int]) -> torch.Tensor:
+        commands = self._command_manager.get_commands()
+        walking_mask = self._command_manager.get_high_level_commands() == 0
+        
+        ### Compute reward components
+        # linear velocity tracking
+        lin_vel_error = torch.sum(torch.square(commands[:, :2] - robot.data.root_lin_vel_b[:, :2]), dim=1)
+        lin_vel_error_mapped = torch.exp(-lin_vel_error / 0.25)
+        # yaw rate tracking
+        yaw_rate_error = torch.square(commands[:, 2] - robot.data.root_ang_vel_b[:, 2])
+        yaw_rate_error_mapped = torch.exp(-yaw_rate_error / 0.25)
+        # z velocity tracking
+        z_vel_error = torch.square(robot.data.root_lin_vel_b[:, 2]) # RVMod
+        # angular velocity x/y
+        ang_vel_error = torch.sum(torch.square(robot.data.root_ang_vel_b[:, :2]), dim=1)
+        # joint torques
+        joint_torques = torch.sum(torch.square(robot.data.applied_torque), dim=1)
+        # joint acceleration
+        joint_accel = torch.sum(torch.square(robot.data.joint_acc), dim=1)
+        # action rate
+        action_rate = torch.sum(torch.square(actions - previous_actions), dim=1)
+        # feet air time
+        first_contact = contact_sensor.compute_first_contact(step_dt)[:, feet_ids]
+        last_air_time = contact_sensor.data.last_air_time[:, feet_ids]
+        air_time = torch.sum((last_air_time - 0.5) * first_contact, dim=1) * (
+            torch.norm(commands[:, :2], dim=1) > 0.1
+        )
+        # undesired contacts
+        net_contact_forces: torch.Tensor = contact_sensor.data.net_forces_w_history
+        is_contact = (
+            torch.max(torch.norm(net_contact_forces[:, :, undesired_contact_body_ids], dim=-1), dim=1)[0] > 1.0
+        )
+        contacts = torch.sum(is_contact, dim=1)
+        # flat orientation
+        flat_orientation = torch.sum(torch.square(robot.data.projected_gravity_b[:, :2]), dim=1)
+
+        ### Compute walking rewards
+        walking_rewards = {
+            "track_lin_vel_xy_exp": lin_vel_error_mapped * self.walk_reward_weights.lin_vel_reward_scale * step_dt,
+            "track_ang_vel_z_exp": yaw_rate_error_mapped * self.walk_reward_weights.yaw_rate_reward_scale * step_dt,
+            "lin_vel_z_l2": z_vel_error * self.walk_reward_weights.z_vel_reward_scale * step_dt, # RVMod
+            # "lin_vel_z_l2": z_vel_error * self.cfg.z_vel_reward_scale * self.step_dt,
+            # "track_z_pos_l2": z_pos_error * self.cfg.z_pos_reward_scale * self.step_dt, # RVMod: z-axis position tracking
+            "ang_vel_xy_l2": ang_vel_error * self.walk_reward_weights.ang_vel_reward_scale * step_dt,
+            "dof_torques_l2": joint_torques * self.walk_reward_weights.joint_torque_reward_scale * step_dt,
+            "dof_acc_l2": joint_accel * self.walk_reward_weights.joint_accel_reward_scale * step_dt,
+            "action_rate_l2": action_rate * self.walk_reward_weights.action_rate_reward_scale * step_dt,
+            "feet_air_time": air_time * self.walk_reward_weights.feet_air_time_reward_scale * step_dt,
+            "undesired_contacts": contacts * self.walk_reward_weights.undesired_contact_reward_scale * step_dt,
+            "flat_orientation_l2": flat_orientation * self.walk_reward_weights.flat_orientation_reward_scale * step_dt,
+        }
+        walking_reward = torch.sum(torch.stack(list(walking_rewards.values()))[:, walking_mask], dim=0) # (N_walking)
+        # Logging
+        for key, value in walking_rewards.items():
+            self.episode_sums[f"walking/{key}"] += value
+
+        ### Compute sitting and unsitting rewards
+        z_vel_error = torch.square(robot.data.root_lin_vel_b[:, 2] - commands[:, 3]) # RVMod
+        z_vel_error_mapped = torch.exp(-z_vel_error / 0.25) # RVMod
+        sit_or_unsit_rewards = {
+            "track_lin_vel_xy_exp": lin_vel_error_mapped * self.sit_unsit_reward_weights.lin_vel_reward_scale * step_dt,
+            "track_ang_vel_z_exp": yaw_rate_error_mapped * self.sit_unsit_reward_weights.yaw_rate_reward_scale * step_dt,
+            "track_vel_z_l2": z_vel_error_mapped * self.sit_unsit_reward_weights.z_track_reward_scale * step_dt, # RVMod
+            "ang_vel_xy_l2": ang_vel_error * self.sit_unsit_reward_weights.ang_vel_reward_scale * step_dt,
+            "dof_torques_l2": joint_torques * self.sit_unsit_reward_weights.joint_torque_reward_scale * step_dt,
+            "dof_acc_l2": joint_accel * self.sit_unsit_reward_weights.joint_accel_reward_scale * step_dt,
+            "action_rate_l2": action_rate * self.sit_unsit_reward_weights.action_rate_reward_scale * step_dt,
+            "undesired_contacts": contacts * self.sit_unsit_reward_weights.undesired_contact_reward_scale * step_dt,
+            "flat_orientation_l2": flat_orientation * self.sit_unsit_reward_weights.flat_orientation_reward_scale * step_dt,
+        }
+        sit_or_unsit_reward = torch.sum(torch.stack(list(sit_or_unsit_rewards.values()))[:, ~walking_mask], dim=0) # (N_sit_unsit)
+        # Logging
+        for key, value in sit_or_unsit_rewards.items():
+            self.episode_sums[f"sit_or_unsit/{key}"] += value
+            
+        ### Aggregate final rewards
+        reward = torch.zeros(size=(self._num_envs,), device=self._device)
+        reward[walking_mask] = walking_reward
+        reward[~walking_mask] = sit_or_unsit_reward
+        return reward
+
+
+
 class ModAnymalCEnv(DirectRLEnv):
     cfg: ModAnymalCFlatEnvCfg
 
@@ -134,32 +241,30 @@ class ModAnymalCEnv(DirectRLEnv):
             self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device
         ) # (N,12)
 
-        # X/Y linear velocity and yaw angular velocity commands
-        # RVMod: Add z-axis target position command
-        # self._commands = torch.zeros(self.num_envs, 4, device=self.device)
-        # self._commands[:,3] = 0.6
-        # self._SIT_HEIGHT = 0.1
-        # self._timesteps_before_switch = torch.zeros(self.num_envs, 4, device=self.device)+1000 # Start at 1000
+        # Command manager
         self.command_manager = CustomCommandManager(self.num_envs, self.device)
         self._commands = self.command_manager.get_commands()
 
+        # Reward manager
+        self.reward_manager = CustomRewardManager(self.num_envs, self.device, self.command_manager, cfg.walking_reward_cfg, cfg.situnsit_reward_cfg)
+
         # Logging
-        self._episode_sums = {
-            key: torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
-            for key in [
-                "track_lin_vel_xy_exp",
-                "track_ang_vel_z_exp",
-                "lin_vel_z_l2",
-                # "track_z_pos_l2", # RVMod: z-axis position tracking
-                "ang_vel_xy_l2",
-                "dof_torques_l2",
-                "dof_acc_l2",
-                "action_rate_l2",
-                "feet_air_time",
-                "undesired_contacts",
-                "flat_orientation_l2",
-            ]
-        }
+        # self._episode_sums = {
+        #     key: torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
+        #     for key in [
+        #         "track_lin_vel_xy_exp",
+        #         "track_ang_vel_z_exp",
+        #         "lin_vel_z_l2",
+        #         # "track_z_pos_l2", # RVMod: z-axis position tracking
+        #         "ang_vel_xy_l2",
+        #         "dof_torques_l2",
+        #         "dof_acc_l2",
+        #         "action_rate_l2",
+        #         "feet_air_time",
+        #         "undesired_contacts",
+        #         "flat_orientation_l2",
+        #     ]
+        # }
         # Get specific body indices
         self._base_id, _ = self._contact_sensor.find_bodies("base")
         self._feet_ids, _ = self._contact_sensor.find_bodies(".*FOOT")
@@ -214,62 +319,12 @@ class ModAnymalCEnv(DirectRLEnv):
                     ], dim=-1)
         observations = {"policy": obs}
         return observations
-
+    
     def _get_rewards(self) -> torch.Tensor:
         self._commands = self.command_manager.get_commands()
-        # linear velocity tracking
-        lin_vel_error = torch.sum(torch.square(self._commands[:, :2] - self._robot.data.root_lin_vel_b[:, :2]), dim=1)
-        lin_vel_error_mapped = torch.exp(-lin_vel_error / 0.25)
-        # yaw rate tracking
-        yaw_rate_error = torch.square(self._commands[:, 2] - self._robot.data.root_ang_vel_b[:, 2])
-        yaw_rate_error_mapped = torch.exp(-yaw_rate_error / 0.25)
-        # z velocity tracking
-        z_vel_error = torch.square(self._robot.data.root_lin_vel_b[:, 2] - self._commands[:, 3]) # RVMod
-        z_vel_error_mapped = torch.exp(-z_vel_error / 0.25) # RVMod
-        # RVMod: z-axis position tracking
-        # z_pos_error = torch.square(self._robot.data.root_com_pos_w[:, 2] - self._commands[:, 3])
-        # angular velocity x/y
-        ang_vel_error = torch.sum(torch.square(self._robot.data.root_ang_vel_b[:, :2]), dim=1)
-        # joint torques
-        joint_torques = torch.sum(torch.square(self._robot.data.applied_torque), dim=1)
-        # joint acceleration
-        joint_accel = torch.sum(torch.square(self._robot.data.joint_acc), dim=1)
-        # action rate
-        action_rate = torch.sum(torch.square(self._actions - self._previous_actions), dim=1)
-        # feet air time
-        first_contact = self._contact_sensor.compute_first_contact(self.step_dt)[:, self._feet_ids]
-        last_air_time = self._contact_sensor.data.last_air_time[:, self._feet_ids]
-        air_time = torch.sum((last_air_time - 0.5) * first_contact, dim=1) * (
-            torch.norm(self._commands[:, :2], dim=1) > 0.1
-        )
-        # undesired contacts
-        net_contact_forces = self._contact_sensor.data.net_forces_w_history
-        is_contact = (
-            torch.max(torch.norm(net_contact_forces[:, :, self._undesired_contact_body_ids], dim=-1), dim=1)[0] > 1.0
-        )
-        contacts = torch.sum(is_contact, dim=1)
-        # flat orientation
-        flat_orientation = torch.sum(torch.square(self._robot.data.projected_gravity_b[:, :2]), dim=1)
-
-        rewards = {
-            "track_lin_vel_xy_exp": lin_vel_error_mapped * self.cfg.lin_vel_reward_scale * self.step_dt,
-            "track_ang_vel_z_exp": yaw_rate_error_mapped * self.cfg.yaw_rate_reward_scale * self.step_dt,
-            "lin_vel_z_l2": z_vel_error_mapped * self.cfg.z_vel_reward_scale * self.step_dt, # RVMod
-            # "lin_vel_z_l2": z_vel_error * self.cfg.z_vel_reward_scale * self.step_dt,
-            # "track_z_pos_l2": z_pos_error * self.cfg.z_pos_reward_scale * self.step_dt, # RVMod: z-axis position tracking
-            "ang_vel_xy_l2": ang_vel_error * self.cfg.ang_vel_reward_scale * self.step_dt,
-            "dof_torques_l2": joint_torques * self.cfg.joint_torque_reward_scale * self.step_dt,
-            "dof_acc_l2": joint_accel * self.cfg.joint_accel_reward_scale * self.step_dt,
-            "action_rate_l2": action_rate * self.cfg.action_rate_reward_scale * self.step_dt,
-            "feet_air_time": air_time * self.cfg.feet_air_time_reward_scale * self.step_dt,
-            "undesired_contacts": contacts * self.cfg.undesired_contact_reward_scale * self.step_dt,
-            "flat_orientation_l2": flat_orientation * self.cfg.flat_orientation_reward_scale * self.step_dt,
-        }
-        reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
-        # Logging
-        for key, value in rewards.items():
-            self._episode_sums[key] += value
-        return reward
+        rewards = self.reward_manager.compute_rewards(self._robot, self._actions, self._previous_actions, self._contact_sensor, 
+                                            self.step_dt, self._feet_ids, self._undesired_contact_body_ids)
+        return rewards
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         time_out = self.episode_length_buf >= self.max_episode_length - 1
@@ -289,15 +344,7 @@ class ModAnymalCEnv(DirectRLEnv):
             self.episode_length_buf[:] = torch.randint_like(self.episode_length_buf, high=int(self.max_episode_length))
         self._actions[env_ids] = 0.0
         self._previous_actions[env_ids] = 0.0
-        # Sample new commands
-        # self._commands[env_ids] = torch.zeros_like(self._commands[env_ids]).uniform_(-1.0, 1.0)
-        # self._commands[env_ids,3] = 0.6
-        # self.command_manager.reset_commands(env_ids, self._robot)
-        # self._commands = self.command_manager.get_commands()
-        # num_envs_to_sample = int(0.2 * len(env_ids))
-        # sampled_envs = torch.randperm(len(env_ids))[:num_envs_to_sample]
-        # self._commands[env_ids[sampled_envs], :3] = 0.0
-        # self._commands[env_ids[sampled_envs], 3] = 0.05
+        
         ### Reset robot state
         joint_pos = self._robot.data.default_joint_pos[env_ids]
         joint_vel = self._robot.data.default_joint_vel[env_ids]
@@ -317,14 +364,13 @@ class ModAnymalCEnv(DirectRLEnv):
         
         ### Sample new commands
         self.command_manager.reset_commands(env_ids, self._robot)
-        # self._commands = self.command_manager.get_commands()
         
         # Logging
         extras = dict()
-        for key in self._episode_sums.keys():
-            episodic_sum_avg = torch.mean(self._episode_sums[key][env_ids])
+        for key in self.reward_manager.episode_sums.keys():
+            episodic_sum_avg = torch.mean(self.reward_manager.episode_sums[key][env_ids])
             extras["Episode_Reward/" + key] = episodic_sum_avg / self.max_episode_length_s
-            self._episode_sums[key][env_ids] = 0.0
+            self.reward_manager.episode_sums[key][env_ids] = 0.0
         self.extras["log"] = dict()
         self.extras["log"].update(extras)
         extras = dict()
@@ -391,8 +437,10 @@ class ModAnymalCEnv(DirectRLEnv):
         arrow_scale, arrow_quat = self._resolve_xyz_velocity_to_arrow(tmp)
         walking_envs = self.command_manager.get_high_level_commands() == 0
         sit_or_unsit_envs = self.command_manager.get_high_level_commands() != 0
-        self.command_visualizer.visualize(translations=target_loc[walking_envs], orientations=arrow_quat[walking_envs], scales=arrow_scale[walking_envs])
-        self.sit_unsit_visualizer.visualize(translations=target_loc[sit_or_unsit_envs], orientations=arrow_quat[sit_or_unsit_envs], scales=arrow_scale[sit_or_unsit_envs])
+        if walking_envs.sum() > 0:
+            self.command_visualizer.visualize(translations=target_loc[walking_envs], orientations=arrow_quat[walking_envs], scales=arrow_scale[walking_envs])
+        if sit_or_unsit_envs.sum() > 0:
+            self.sit_unsit_visualizer.visualize(translations=target_loc[sit_or_unsit_envs], orientations=arrow_quat[sit_or_unsit_envs], scales=arrow_scale[sit_or_unsit_envs])
         
 
     def _resolve_xyz_velocity_to_arrow(self, xyz_velocity: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
