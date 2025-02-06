@@ -21,8 +21,8 @@ from isaaclab.markers.config import RED_ARROW_X_MARKER_CFG, BLUE_ARROW_X_MARKER_
 import isaaclab.utils.math as math_utils
 # from isaaclab.envs.mdp.commands.velocity_command import UniformVelocityCommand # Contains example of marker
 
-"""python scripts/reinforcement_learning/skrl/train.py --task=Isaac-Velocity-Mod-Flat-Anymal-C-Direct-v0 \
---headless --video --video_length=600 --video_interval=1000 --num_envs=1024"""
+"""taskset -c 80-120 python scripts/reinforcement_learning/skrl/train.py --task=Isaac-Velocity-Mod-Flat-Anymal-C-Direct-v0 \
+--headless --video --video_length=200 --video_interval=2000 --num_envs=1024"""
 
 class CustomCommandManager:
     def __init__(self, num_envs: int, device: torch.device, z_is_vel: bool):
@@ -59,11 +59,11 @@ class CustomCommandManager:
         self._time_doing_action[successful_walks] += 1
         
         ### Update high_level actions
-        finished_sitting_envs = torch.logical_and(sitting_envs, self._time_doing_action > 100) # (N)
-        finished_unsitting_envs = torch.logical_and(unsitting_envs, self._time_doing_action > 100) # (N)
-        finished_walking_envs = torch.logical_and(walking_envs, self._time_doing_action > 500) # (N)
+        finished_sitting_envs = torch.logical_and(sitting_envs, self._time_doing_action > 50) # (N), 1 second
+        finished_unsitting_envs = torch.logical_and(unsitting_envs, self._time_doing_action > 50) # (N), 1 second
+        finished_walking_envs = torch.logical_and(walking_envs, self._time_doing_action > 500) # (N), 10 seconds
         self._high_level_commands[finished_sitting_envs] = 1 # Make them unsit
-        self._high_level_commands[finished_unsitting_envs] = 0 # Make them walk
+        self._high_level_commands[finished_unsitting_envs] = 0 # Make them sit walk
         self._high_level_commands[finished_walking_envs] = -1 # Make them sit
         self._time_doing_action[finished_sitting_envs] = 0
         self._time_doing_action[finished_unsitting_envs] = 0
