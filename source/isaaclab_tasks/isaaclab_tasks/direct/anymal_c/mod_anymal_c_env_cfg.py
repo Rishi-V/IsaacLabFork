@@ -73,34 +73,70 @@ class EventCfg:
     # )
     pass
 
-
+######################################################################
+####################### Reward Configurations ########################
+#region
+#### Simple ones
 @configclass
 class WalkingRewardCfg:
     # reward scales
     lin_vel_reward_scale = 1.0
     yaw_rate_reward_scale = 0.5
-    z_vel_reward_scale = 2.0 # Reward z-axis velocity reward
+    z_vel_reward_scale = -2.0 # Change to z-height with positive reward
     ang_vel_reward_scale = -0.05
-    joint_torque_reward_scale = -2.5e-5
-    joint_accel_reward_scale = -2.5e-7
-    action_rate_reward_scale = -0.01
-    feet_air_time_reward_scale = 0.5
+    joint_torque_reward_scale = 0
+    joint_accel_reward_scale = 0
+    action_rate_reward_scale = -0.0001
+    feet_air_time_reward_scale = 0.5 # Keep but change based on task
     undesired_contact_reward_scale = -10.0 # RVMod: Originally -1.0
-    flat_orientation_reward_scale = -5.0
-    
+    flat_orientation_reward_scale = -1
+
 @configclass
 class SitUnsitRewardCfg:
     # reward scales
-    lin_vel_reward_scale = 0.5
+    lin_vel_reward_scale = 1.0
     yaw_rate_reward_scale = 0.5
-    z_track_reward_scale = 10.0
+    z_is_vel = False
+    z_reward_scale = 2.0 # Change to z-height with positive reward
     ang_vel_reward_scale = -0.05
-    joint_torque_reward_scale = -2.5e-5
-    joint_accel_reward_scale = -2.5e-7
-    action_rate_reward_scale = -0.01
-    undesired_contact_reward_scale = -1.0 # RVMod: Originally -1.0
-    flat_orientation_reward_scale = -5.0
+    joint_torque_reward_scale = 0
+    joint_accel_reward_scale = 0
+    action_rate_reward_scale = -0.0001
+    undesired_contact_reward_scale = -10.0 # RVMod: Originally -1.0
+    flat_orientation_reward_scale = -1
+
+### More complex ones
+# @configclass
+# class WalkingRewardCfg:
+#     # reward scales
+#     lin_vel_reward_scale = 1.0
+#     yaw_rate_reward_scale = 0.5
+#     z_vel_reward_scale = -2.0 # Reward z-axis velocity reward
+#     ang_vel_reward_scale = -0.05
+#     joint_torque_reward_scale = -2.5e-5
+#     joint_accel_reward_scale = -2.5e-7
+#     action_rate_reward_scale = -0.01
+#     feet_air_time_reward_scale = 0.5
+#     undesired_contact_reward_scale = -10.0 # RVMod: Originally -1.0
+#     flat_orientation_reward_scale = -5.0
     
+# @configclass
+# class SitUnsitRewardCfg:
+#     # reward scales
+#     lin_vel_reward_scale = 0.5
+#     yaw_rate_reward_scale = 0.5
+#     z_track_reward_scale = 10.0
+#     # Maybe switch to reach target height with positive error term
+#     # exp(-0.5 * (z_target - z_current)^2)
+#     ang_vel_reward_scale = -0.05
+#     joint_torque_reward_scale = -2.5e-5
+#     joint_accel_reward_scale = -2.5e-7
+#     action_rate_reward_scale = -0.01
+#     undesired_contact_reward_scale = -1.0 # RVMod: Originally -1.0
+#     flat_orientation_reward_scale = -5.0
+#endregion
+######################### End Reward Configurations ####################
+########################################################################
 
 
 @configclass
