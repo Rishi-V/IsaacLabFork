@@ -29,7 +29,7 @@ class CustomCommandManager:
         self._num_envs = num_envs
         self._device = device
         self.z_is_vel = z_is_vel
-        self.SITTING_HEIGHT = 0.2
+        self.SITTING_HEIGHT = 0.05
         self.WALKING_HEIGHT = 0.6
         self.PROB_SIT = 0.5
         self.MAX_Z_VEL = 0.1
@@ -61,7 +61,7 @@ class CustomCommandManager:
         ### Update high_level actions
         finished_sitting_envs = torch.logical_and(sitting_envs, self._time_doing_action > 50) # (N), 1 second
         finished_unsitting_envs = torch.logical_and(unsitting_envs, self._time_doing_action > 50) # (N), 1 second
-        finished_walking_envs = torch.logical_and(walking_envs, self._time_doing_action > 500) # (N), 10 seconds
+        finished_walking_envs = torch.logical_and(walking_envs, self._time_doing_action > 300) # (N), 10 seconds
         self._high_level_commands[finished_sitting_envs] = 1 # Make them unsit
         self._high_level_commands[finished_unsitting_envs] = 0 # Make them sit walk
         self._high_level_commands[finished_walking_envs] = -1 # Make them sit

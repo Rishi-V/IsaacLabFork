@@ -21,22 +21,7 @@ from isaaclab.utils import configclass
 from isaaclab_assets.robots.anymal import ANYMAL_C_CFG  # isort: skip
 from isaaclab.terrains.config.rough import ROUGH_TERRAINS_CFG  # isort: skip
 import torch
-# from .mod_anymal_c_command import customCommands
 
-# def customFunc(env, env_ids):
-#     env._commands = torch.zeros(env.num_envs, 4, device=env.device)
-
-
-def customCommands(env, env_ids: torch.Tensor | None):
-    if env_ids is None or len(env_ids) == env.num_envs:
-            env_ids = env._robot._ALL_INDICES
-    env._commands[env_ids] = torch.zeros_like(env._commands[env_ids]).uniform_(-1.0, 1.0)
-    env._commands[env_ids,3] = 0.6
-    
-    # num_envs_to_sample = int(0.2 * len(env_ids))
-    # sampled_envs = torch.randperm(len(env_ids))[:num_envs_to_sample]
-    # env._commands[env_ids[sampled_envs], :3] = 0.0
-    # env._commands[env_ids[sampled_envs], 3] = 0.05
 
 @configclass
 class EventCfg:
@@ -62,14 +47,6 @@ class EventCfg:
     #         "mass_distribution_params": (-5.0, 5.0),
     #         "operation": "add",
     #     },
-    # )
-    
-    # change_command = EventTerm(
-    #     func=customCommands,
-    #     mode="interval",
-    #     is_global_time=True,
-    #     interval_range_s = (10.9, 11.1),
-    #     params={}
     # )
     pass
 
@@ -97,13 +74,13 @@ class SitUnsitRewardCfg:
     lin_vel_reward_scale = 0.2
     yaw_rate_reward_scale = 0.2
     z_is_vel = False
-    z_reward_scale = 1.0 #5.0 # Change to z-height with positive reward
+    z_reward_scale = 2.0 #5.0 # Change to z-height with positive reward
     ang_vel_reward_scale = -0.005
     joint_torque_reward_scale = -2.5e-5
     joint_accel_reward_scale = -2.5e-7
     action_rate_reward_scale = -0.0001
     undesired_contact_reward_scale = -10.0 # RVMod: Originally -1.0
-    flat_orientation_reward_scale = -0.1
+    flat_orientation_reward_scale = -0.5
 
 ### More complex ones
 # @configclass
