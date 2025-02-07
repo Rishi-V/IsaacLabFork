@@ -80,7 +80,7 @@ class SitUnsitRewardCfg:
     joint_accel_reward_scale = -2.5e-7
     action_rate_reward_scale = -0.0001
     undesired_contact_reward_scale = -10.0 # RVMod: Originally -1.0
-    flat_orientation_reward_scale = -0.5
+    flat_orientation_reward_scale = -1
 
 ### More complex ones
 # @configclass

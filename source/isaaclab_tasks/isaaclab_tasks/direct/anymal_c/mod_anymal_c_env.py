@@ -29,8 +29,8 @@ class CustomCommandManager:
         self._num_envs = num_envs
         self._device = device
         self.z_is_vel = z_is_vel
-        self.SITTING_HEIGHT = 0.05
-        self.WALKING_HEIGHT = 0.6
+        self.SITTING_HEIGHT = 0.1
+        self.WALKING_HEIGHT = 0.60
         self.PROB_SIT = 0.5
         self.MAX_Z_VEL = 0.1
         
@@ -55,13 +55,13 @@ class CustomCommandManager:
         walking_envs = self._high_level_commands == 0 # (N)
         lin_vel_error = torch.sum(torch.square(self._raw_commands[:, :2] - robot.data.root_lin_vel_b[:, :2]), dim=1) < 0.1 # (N)
         yaw_rate_error = torch.square(self._raw_commands[:, 2] - robot.data.root_ang_vel_b[:, 2]) < 0.1 # (N)
-        successful_walks = torch.logical_and(lin_vel_error, yaw_rate_error) # (N)
+        successful_walks = torch.logical_and(walking_envs, torch.logical_and(lin_vel_error, yaw_rate_error)) # (N)
         self._time_doing_action[successful_walks] += 1
         
         ### Update high_level actions
-        finished_sitting_envs = torch.logical_and(sitting_envs, self._time_doing_action > 50) # (N), 1 second
-        finished_unsitting_envs = torch.logical_and(unsitting_envs, self._time_doing_action > 50) # (N), 1 second
-        finished_walking_envs = torch.logical_and(walking_envs, self._time_doing_action > 300) # (N), 10 seconds
+        finished_sitting_envs = torch.logical_and(sitting_envs, self._time_doing_action > 100) # (N), 1 second
+        finished_unsitting_envs = torch.logical_and(unsitting_envs, self._time_doing_action > 100) # (N), 1 second
+        finished_walking_envs = torch.logical_and(walking_envs, self._time_doing_action > 400) # (N), 10 seconds
         self._high_level_commands[finished_sitting_envs] = 1 # Make them unsit
         self._high_level_commands[finished_unsitting_envs] = 0 # Make them sit walk
         self._high_level_commands[finished_walking_envs] = -1 # Make them sit
@@ -97,9 +97,8 @@ class CustomCommandManager:
         ## Split new envs into walking and sitting
         prob_sit = torch.rand(size=(len(env_ids),), device=self._device) # (E)
         bool_list = torch.where(prob_sit < self.PROB_SIT, 0, 1) # (E)
-        walking_inds = env_ids[torch.where(bool_list == 1)[0]] # (E)
         sitting_inds = env_ids[torch.where(bool_list == 0)[0]] # (E)
-        # self._high_level_commands[walking_inds] = torch.where(prob_sit < self.PROB_SIT, -1, 0) # (E)
+        walking_inds = env_ids[torch.where(bool_list == 1)[0]] # (E)
         
         ## Set random walking commands
         self._high_level_commands[walking_inds] = 0
@@ -280,7 +279,7 @@ class CustomRewardManager:
             z_error = torch.square(robot.data.root_lin_vel_b[:, 2] - commands[:, 3]) # RVMod
         else:
             z_error = torch.square(robot.data.root_com_pos_w[:, 2] - commands[:, 3])
-        z_error_mapped = torch.exp(-z_error / 0.25) # RVMod
+        z_error_mapped = torch.exp(-z_error / 0.1) # RVMod
         sit_or_unsit_rewards = {
             "track_lin_vel_xy_exp": lin_vel_error_mapped * self.sit_unsit_reward_weights.lin_vel_reward_scale * step_dt,
             "track_ang_vel_z_exp": yaw_rate_error_mapped * self.sit_unsit_reward_weights.yaw_rate_reward_scale * step_dt,
