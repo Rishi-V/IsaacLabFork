@@ -50,20 +50,23 @@ class CustomCommandManager:
         
         ### Update high_level actions
         # finished_sitting_envs = torch.logical_and(sitting_envs, self._time_doing_action > 50) # (N), 1 second
-        finished_sitting_envs = sitting_envs & (self._time_doing_action > 50) & finished_trying_envs # (N), 1 second
+        finished_sitting_envs = sitting_envs & ((self._time_doing_action > 50) | finished_trying_envs) # (N), 1 second
         # finished_unsitting_envs = torch.logical_and(unsitting_envs, self._time_doing_action > 50) # (N), 1 second
-        finished_unsitting_envs = unsitting_envs & (self._time_doing_action > 50) & finished_trying_envs  # (N), 1 second
+        finished_unsitting_envs = unsitting_envs & ((self._time_doing_action > 50) | finished_trying_envs)  # (N), 1 second
         # finished_walking_envs = torch.logical_and(walking_envs, self._time_doing_action > 400) # (N), 10 seconds
-        finished_walking_envs = walking_envs & (self._time_doing_action > 400) & finished_trying_envs # (N), 10 seconds
+        finished_walking_envs = walking_envs & ((self._time_doing_action > 400) | finished_trying_envs) # (N), 10 seconds
         self._high_level_commands[finished_sitting_envs] = 1 # Make them unsit
         self._high_level_commands[finished_unsitting_envs] = 0 # Make them sit walk
         self._high_level_commands[finished_walking_envs] = -1 # Make them sit
         self._time_doing_action[finished_sitting_envs] = 0
         self._time_doing_action[finished_unsitting_envs] = 0
         self._time_doing_action[finished_walking_envs] = 0
-        self._time_trying_command[finished_sitting_envs].uniform_(300, 500) # Spend at most 500 steps trying to sit
-        self._time_trying_command[finished_unsitting_envs].uniform_(300, 500) # Spend at most 500 steps trying to unsit
-        self._time_trying_command[finished_walking_envs].uniform_(300, 500) # Spend at most 500 steps trying to walk
+        self.set_time_trying_command(finished_sitting_envs, boolmask=True)
+        self.set_time_trying_command(finished_unsitting_envs, boolmask=True)
+        self.set_time_trying_command(finished_walking_envs, boolmask=True)
+        # self._time_trying_command[finished_sitting_envs].uniform_(300, 500) # Spend at most 500 steps trying to sit
+        # self._time_trying_command[finished_unsitting_envs].uniform_(300, 500) # Spend at most 500 steps trying to unsit
+        # self._time_trying_command[finished_walking_envs].uniform_(300, 500) # Spend at most 500 steps trying to walk
     
         # if torch.sum(finished_sitting_envs) > 0:
         #     print(f"Finished sitting: {torch.sum(finished_sitting_envs)}")
@@ -115,7 +118,16 @@ class CustomCommandManager:
         
         ## Reset time doing action
         self._time_doing_action[env_ids] = 0
-        self._time_trying_command[env_ids] = torch.zeros(size=(len(env_ids),), device=self._device).uniform_(300, 500) # Spend at most 500 steps per command
+        # self._time_trying_command[env_ids] = torch.zeros(size=(len(env_ids),), device=self._device).uniform_(300, 500) # Spend at most 500 steps per command
+        self.set_time_trying_command(env_ids, boolmask=False)
+        
+    def set_time_trying_command(self, env_ids: torch.Tensor, boolmask: bool):
+        """env_ids: (E)
+        boolmask: bool indicating whether env_ids is a boolean mask or not"""
+        if boolmask:
+            self._time_trying_command[env_ids] = torch.zeros(size=(int(env_ids.sum().item()),), device=self._device).uniform_(300, 500)
+        else:
+            self._time_trying_command[env_ids] = torch.zeros(size=(len(env_ids),), device=self._device).uniform_(300, 500)
         
     def set_random_walk_commands(self, env_ids: torch.Tensor):
         """env_ids: (E)
