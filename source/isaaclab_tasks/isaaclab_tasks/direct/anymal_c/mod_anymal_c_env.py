@@ -43,7 +43,7 @@ class ModAnymalCEnv(DirectRLEnv):
 
         # Command manager
         z_is_vel = cfg.situnsit_reward_cfg.z_is_vel
-        self.command_manager = CustomCommandManager(self.num_envs, self.device, z_is_vel=z_is_vel)
+        self.command_manager = CustomCommandManager(self.num_envs, self.device, cfg.command_cfg, z_is_vel=z_is_vel)
         self._commands = self.command_manager.get_commands()
 
         # Reward manager

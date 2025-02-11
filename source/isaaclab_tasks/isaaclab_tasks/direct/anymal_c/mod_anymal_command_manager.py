@@ -6,16 +6,18 @@ from isaaclab.assets import Articulation
 from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 from isaaclab.markers.config import RED_ARROW_X_MARKER_CFG, BLUE_ARROW_X_MARKER_CFG
 import isaaclab.utils.math as math_utils
+from .mod_anymal_c_env_cfg import CommandCfg
 # from isaaclab.envs.mdp.commands.velocity_command import UniformVelocityCommand # Contains example of marker
 
 class CustomCommandManager:
-    def __init__(self, num_envs: int, device: torch.device, z_is_vel: bool):
+    def __init__(self, num_envs: int, device: torch.device, cmd_cfg: CommandCfg, z_is_vel: bool):
         self._num_envs = num_envs
         self._device = device
+        self.cmd_cfg = cmd_cfg
         self.z_is_vel = z_is_vel
         self.SITTING_HEIGHT = 0.2
         self.WALKING_HEIGHT = 0.60
-        self.PROB_SIT = 0.5
+        self.PROB_SIT = cmd_cfg.prob_sit #0.5
         self.MAX_Z_VEL = 0.1
         
         self._high_level_commands = torch.zeros(size=(self._num_envs,), device=self._device) # (N); -1=sit, 1=unsit, 0=walk
@@ -59,9 +61,9 @@ class CustomCommandManager:
         self._time_doing_action[finished_sitting_envs] = 0
         self._time_doing_action[finished_unsitting_envs] = 0
         self._time_doing_action[finished_walking_envs] = 0
-        self._time_trying_command[finished_sitting_envs].uniform_(0, 1000) # Spend at most 500 steps trying to sit
-        self._time_trying_command[finished_unsitting_envs].uniform_(0, 1000) # Spend at most 500 steps trying to unsit
-        self._time_trying_command[finished_walking_envs].uniform_(0, 1000) # Spend at most 500 steps trying to walk
+        self._time_trying_command[finished_sitting_envs].uniform_(300, 500) # Spend at most 500 steps trying to sit
+        self._time_trying_command[finished_unsitting_envs].uniform_(300, 500) # Spend at most 500 steps trying to unsit
+        self._time_trying_command[finished_walking_envs].uniform_(300, 500) # Spend at most 500 steps trying to walk
     
         # if torch.sum(finished_sitting_envs) > 0:
         #     print(f"Finished sitting: {torch.sum(finished_sitting_envs)}")
@@ -113,7 +115,7 @@ class CustomCommandManager:
         
         ## Reset time doing action
         self._time_doing_action[env_ids] = 0
-        self._time_trying_command[env_ids].uniform_(0, 1000) # Spend at most 500 steps per command
+        self._time_trying_command[env_ids] = torch.zeros(size=(len(env_ids),), device=self._device).uniform_(300, 500) # Spend at most 500 steps per command
         
     def set_random_walk_commands(self, env_ids: torch.Tensor):
         """env_ids: (E)

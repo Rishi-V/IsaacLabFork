@@ -100,7 +100,7 @@ class SitUnsitRewardCfg:
     joint_accel_reward_scale = -5e-9
     action_rate_reward_scale = -0.0001
     undesired_contact_reward_scale = -10.0 # RVMod: Originally -1.0
-    flat_orientation_reward_scale = -0.1
+    flat_orientation_reward_scale = -0.5
 
 ### More complex ones
 # @configclass
@@ -216,5 +216,6 @@ class ModAnymalCFlatEnvCfg(DirectRLEnvCfg):
     # feet_air_time_reward_scale = 0.5
     # undesired_contact_reward_scale = -10.0 # RVMod: Originally -1.0
     # flat_orientation_reward_scale = -5.0
+    command_cfg: CommandCfg = CommandCfg()
     walking_reward_cfg: WalkingRewardCfg = WalkingRewardCfg()
     situnsit_reward_cfg: SitUnsitRewardCfg = SitUnsitRewardCfg()
