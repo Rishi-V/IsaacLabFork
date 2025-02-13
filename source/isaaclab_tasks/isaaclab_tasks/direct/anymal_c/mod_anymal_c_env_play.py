@@ -95,12 +95,100 @@ from isaaclab_tasks.utils import get_checkpoint_path, load_cfg_from_registry, pa
 algorithm = args_cli.algorithm.lower()
 
 ### RVMod
+from isaaclab.assets import Articulation
 from isaaclab_tasks.direct.anymal_c.mod_anymal_c_env import ModAnymalCEnv
+from abc import ABC, abstractmethod
 """
 taskset -c 80-120 python source/isaaclab_tasks/isaaclab_tasks/direct/anymal_c/mod_anymal_c_env_play.py \
     --headless --video --video_length=600 --num_envs=32 \
     --checkpoint=logs/skrl/anymal_c_mod_flat_direct/2025-02-06_18-22-26_ppo_torch/checkpoints/best_agent.pt
 """
+
+#######################################################################
+############ Commands ###############################################
+# region
+class AbstractCommand(ABC):
+    WALKING_HEIGHT = 0.6
+    SITTING_HEIGHT = 0.2
+    
+    def __init__(self, device: torch.device):
+        self._device = device
+    
+    @abstractmethod
+    def get_command(self) -> torch.Tensor:
+        pass
+    
+    @abstractmethod
+    def completed(self, robot: Articulation) -> bool:
+        pass
+    
+class WalkCommand(AbstractCommand):
+    def __init__(self, device: torch.device, dir: tuple[float, float, float], timesteps: int):
+        """
+        dir: (x,y,yaw) direction to walk in
+        """
+        super().__init__(device)
+        self.SPEED = 1.0
+        self.dir = dir
+        self.timesteps = timesteps
+        self._current_timestep = 0
+        
+    def get_command(self) -> torch.Tensor:
+        return torch.tensor([self.dir[0] * self.SPEED, self.dir[1] * self.SPEED, self.dir[2], 
+                             AbstractCommand.WALKING_HEIGHT])
+        
+    def completed(self, robot: Articulation) -> bool:
+        self._current_timestep += 1
+        return self._current_timestep >= self.timesteps
+    
+class SitUnsitCommand(AbstractCommand):
+    def __init__(self, device: torch.device, sit: bool):
+        super().__init__(device)
+        self.sit = sit
+        if self.sit:
+            self._target_height = AbstractCommand.SITTING_HEIGHT
+        else:
+            self._target_height = AbstractCommand.WALKING_HEIGHT
+        self.ACCURACY = 0.05
+        self._current_timestep = 0
+        self.HOLDING_TIMESTEPS = 50
+
+    def get_command(self) -> torch.Tensor:
+        return torch.tensor([0.0, 0.0, 0.0, self._target_height])
+    
+    def completed(self, robot: Articulation) -> bool:
+        assert robot.data.root_com_pos_w.shape[0] == 1 # only works for single robot env
+        self._current_timestep += bool((torch.abs(robot.data.root_com_pos_w[:, 2] - self._target_height) < self.ACCURACY)[0])
+        return self._current_timestep >= self.HOLDING_TIMESTEPS
+        
+    
+class PlayCommandManager:
+    def __init__(self, command_list: list[AbstractCommand]):
+        self._command_list = command_list
+        self._command_at = 0
+
+    def update_commands(self, robot: Articulation) -> torch.Tensor:
+        if self._command_list[self._command_at].completed(robot):
+            self._command_at += 1
+        self._command_at = min(self._command_at, len(self._command_list) - 1)
+        return self._command_list[self._command_at].get_command()
+    
+    def create_obs(self, robot: Articulation) -> torch.Tensor:
+        return torch.cat([
+            robot.data.root_lin_vel_b,
+            robot.data.root_ang_vel_b,
+            robot.data.projected_gravity_b,
+            self.update_commands(robot),
+            robot.data.joint_pos - robot.data.default_joint_pos,
+            robot.data.joint_vel,
+            robot.data.root_com_pos_w,
+            robot.data.root_com_vel_w,
+        ], dim=-1)
+        
+        
+# endregion
+#######################################################################
+
 
 def main():
     task = "Isaac-Velocity-Mod-Flat-Anymal-C-Direct-v0"
@@ -180,6 +268,19 @@ def main():
     obs, _ = env.reset()
     timestep = 0
     underlying_env: ModAnymalCEnv = env._unwrapped
+    
+    # Create command manager
+    device = underlying_env.device
+    WALK_TIME = 500
+    command_manager = PlayCommandManager([
+        WalkCommand(device, (1.0, 0.0, 0.0), WALK_TIME),
+        SitUnsitCommand(device, True),
+        SitUnsitCommand(device, False),
+        WalkCommand(device, (-1.0, 0.0, 0.0), WALK_TIME),
+        SitUnsitCommand(device, True),
+        SitUnsitCommand(device, False),
+    ])
+    
     # simulate environment
     while simulation_app.is_running():
         start_time = time.time()
@@ -188,6 +289,7 @@ def main():
         # run everything in inference mode
         with torch.inference_mode():
             # agent stepping
+            command = command_manager.get_current_command(underlying_env._robot)
             outputs = runner.agent.act(obs, timestep=0, timesteps=0)
             actions = outputs[-1].get("mean_actions", outputs[0])
             # env stepping

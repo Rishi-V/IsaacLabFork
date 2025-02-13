@@ -44,7 +44,11 @@ class CustomRewardManager:
         yaw_rate_error = torch.square(commands[:, 2] - robot.data.root_ang_vel_b[:, 2])
         yaw_rate_error_mapped = torch.exp(-yaw_rate_error / 0.25)
         # z velocity tracking
-        z_vel_error = torch.square(robot.data.root_lin_vel_b[:, 2]) # RVMod
+        # z_vel_error = torch.square(robot.data.root_lin_vel_b[:, 2]) # RVMod
+        if self._z_is_vel:
+            z_error = torch.square(robot.data.root_lin_vel_b[:, 2] - commands[:, 3]) # RVMod
+        else:
+            z_error = torch.square(robot.data.root_com_pos_w[:, 2] - commands[:, 3])
         # angular velocity x/y
         ang_vel_error = torch.sum(torch.square(robot.data.root_ang_vel_b[:, :2]), dim=1)
         # joint torques
@@ -72,7 +76,7 @@ class CustomRewardManager:
         walking_rewards = {
             "track_lin_vel_xy_exp": lin_vel_error_mapped * self.walk_reward_weights.lin_vel_reward_scale * step_dt,
             "track_ang_vel_z_exp": yaw_rate_error_mapped * self.walk_reward_weights.yaw_rate_reward_scale * step_dt,
-            "lin_vel_z_l2": z_vel_error * self.walk_reward_weights.z_vel_reward_scale * step_dt, # RVMod
+            "lin_vel_z_l2": z_error * self.walk_reward_weights.z_vel_reward_scale * step_dt, # RVMod
             # "lin_vel_z_l2": z_vel_error * self.cfg.z_vel_reward_scale * self.step_dt,
             # "track_z_pos_l2": z_pos_error * self.cfg.z_pos_reward_scale * self.step_dt, # RVMod: z-axis position tracking
             "ang_vel_xy_l2": ang_vel_error * self.walk_reward_weights.ang_vel_reward_scale * step_dt,
@@ -97,10 +101,6 @@ class CustomRewardManager:
             self.episode_sums[f"walking/{key}"] += value
 
         ### Compute sitting and unsitting rewards
-        if self._z_is_vel:
-            z_error = torch.square(robot.data.root_lin_vel_b[:, 2] - commands[:, 3]) # RVMod
-        else:
-            z_error = torch.square(robot.data.root_com_pos_w[:, 2] - commands[:, 3])
         z_error_mapped = torch.exp(-z_error / 0.25) # RVMod
         flat_orientation_mapped = torch.exp(-flat_orientation / 0.25) # RVMod
         sit_or_unsit_rewards = {

@@ -57,6 +57,12 @@ class EventCfg:
 class CommandCfg:
     prob_sit = 0.5
     
+@configclass
+class CustomCommandCfg:
+    max_cmd_length = 4
+    cmd_list = [(("r_sit", "r_unsit", "r_walk"), 0.45), (("r_walk", "r_sit", "r_unsit"), 0.5),
+                (("walk", "unsit", "sit", "walk"), 0.05)]
+    
 #endregion
 ######################### End Command Configurations ####################
 
@@ -86,7 +92,7 @@ class WalkingRewardCfg:
     joint_accel_reward_scale = -2.5e-07
     action_rate_reward_scale = -0.01
     feet_air_time_reward_scale = 0.5
-    undesired_contact_reward_scale = -1.0
+    undesired_contact_reward_scale = -1 #-1.0
     flat_orientation_reward_scale = -1
 
 @configclass
@@ -112,7 +118,7 @@ class SitUnsitRewardCfg:
     joint_torque_reward_scale = -2e-5
     joint_accel_reward_scale = -5e-9
     action_rate_reward_scale = -0.01
-    undesired_contact_reward_scale = -1.0 # RVMod: Originally -1.0
+    undesired_contact_reward_scale = -1 #-1.0 # RVMod: Originally -1.0
 
 ### More complex ones
 # @configclass
