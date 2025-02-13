@@ -24,7 +24,7 @@ from .mod_anymal_reward_manager import CustomRewardManager
 # # from isaaclab.envs.mdp.commands.velocity_command import UniformVelocityCommand # Contains example of marker
 
 """taskset -c 80-120 python scripts/reinforcement_learning/skrl/train.py --task=Isaac-Velocity-Mod-Flat-Anymal-C-Direct-v0 \
---headless --video --video_length=200 --video_interval=2000 --num_envs=1024"""
+--headless --video --video_length=600 --video_interval=4000 --num_envs=1024"""
 
 
 
@@ -131,10 +131,10 @@ class ModAnymalCEnv(DirectRLEnv):
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         time_out = self.episode_length_buf >= self.max_episode_length - 1
-        # net_contact_forces = self._contact_sensor.data.net_forces_w_history
-        # died = torch.any(torch.max(torch.norm(net_contact_forces[:, :, self._base_id], dim=-1), dim=1)[0] > 1.0, dim=1)
-        tipping_threshold = 0.8  # Define a tipping threshold, note that torch.norm(projected_gravity_b) is 1.0
-        died = torch.norm(self._robot.data.projected_gravity_b[:, :2], dim=1) > tipping_threshold
+        net_contact_forces = self._contact_sensor.data.net_forces_w_history
+        died = torch.any(torch.max(torch.norm(net_contact_forces[:, :, self._base_id], dim=-1), dim=1)[0] > 1.0, dim=1)
+        # tipping_threshold = 0.8  # Define a tipping threshold, note that torch.norm(projected_gravity_b) is 1.0
+        # died = torch.norm(self._robot.data.projected_gravity_b[:, :2], dim=1) > tipping_threshold
         return died, time_out
 
     def _reset_idx(self, env_ids: torch.Tensor | None):

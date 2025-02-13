@@ -83,7 +83,15 @@ class CustomRewardManager:
             "undesired_contacts": contacts * self.walk_reward_weights.undesired_contact_reward_scale * step_dt,
             "flat_orientation_l2": flat_orientation * self.walk_reward_weights.flat_orientation_reward_scale * step_dt,
         }
+        ## Original reward calculation
         walking_reward = torch.sum(torch.stack(list(walking_rewards.values()))[:, walking_mask], dim=0) # (N_walking)
+        # task_keys = ["track_lin_vel_xy_exp", "track_ang_vel_z_exp"]
+        # aux_keys = [key for key in walking_rewards.keys() if key not in task_keys]
+        # walking_reward = self.compute_walk_these_ways_reward(walking_rewards, walking_mask, task_keys, aux_keys)
+        # r_walking_task = torch.sum(torch.stack([walking_rewards[key] for key in task_keys])[:, walking_mask], dim=0)
+        # r_walking_aux = torch.sum(torch.stack([walking_rewards[key] for key in aux_keys])[:, walking_mask], dim=0)
+        # r_walking = r_walking_task * torch.exp(r_walking_aux * 0.02)
+        
         # Logging
         for key, value in walking_rewards.items():
             self.episode_sums[f"walking/{key}"] += value
@@ -94,6 +102,7 @@ class CustomRewardManager:
         else:
             z_error = torch.square(robot.data.root_com_pos_w[:, 2] - commands[:, 3])
         z_error_mapped = torch.exp(-z_error / 0.25) # RVMod
+        flat_orientation_mapped = torch.exp(-flat_orientation / 0.25) # RVMod
         sit_or_unsit_rewards = {
             "track_lin_vel_xy_exp": lin_vel_error_mapped * self.sit_unsit_reward_weights.lin_vel_reward_scale * step_dt,
             "track_ang_vel_z_exp": yaw_rate_error_mapped * self.sit_unsit_reward_weights.yaw_rate_reward_scale * step_dt,
@@ -103,9 +112,15 @@ class CustomRewardManager:
             "dof_acc_l2": joint_accel * self.sit_unsit_reward_weights.joint_accel_reward_scale * step_dt,
             "action_rate_l2": action_rate * self.sit_unsit_reward_weights.action_rate_reward_scale * step_dt,
             "undesired_contacts": contacts * self.sit_unsit_reward_weights.undesired_contact_reward_scale * step_dt,
-            "flat_orientation_l2": flat_orientation * self.sit_unsit_reward_weights.flat_orientation_reward_scale * step_dt,
+            # "flat_orientation_l2": flat_orientation * self.sit_unsit_reward_weights.flat_orientation_reward_scale * step_dt,
+            "flat_orientation_l2": flat_orientation_mapped * self.sit_unsit_reward_weights.flat_orientation_reward_scale * step_dt,
         }
+        ## Original reward calculation
         sit_or_unsit_reward = torch.sum(torch.stack(list(sit_or_unsit_rewards.values()))[:, ~walking_mask], dim=0) # (N_sit_unsit)
+        # task_keys = ["track_lin_vel_xy_exp", "track_ang_vel_z_exp", "z_error"]
+        # aux_keys = [key for key in sit_or_unsit_rewards.keys() if key not in task_keys]
+        # sit_or_unsit_reward = self.compute_walk_these_ways_reward(sit_or_unsit_rewards, ~walking_mask, task_keys, aux_keys)
+        
         # Logging
         for key, value in sit_or_unsit_rewards.items():
             self.episode_sums[f"sit_or_unsit/{key}"] += value
@@ -115,3 +130,10 @@ class CustomRewardManager:
         reward[walking_mask] = walking_reward
         reward[~walking_mask] = sit_or_unsit_reward
         return reward
+    
+    def compute_walk_these_ways_reward(self, reward_dict: dict[str, torch.Tensor], mask, task_keys, aux_keys) -> torch.Tensor:
+        """Computes the reward for the walk_these_ways task."""
+        r_task = torch.sum(torch.stack([reward_dict[key] for key in task_keys])[:, mask], dim=0)
+        r_aux = torch.sum(torch.stack([reward_dict[key] for key in aux_keys])[:, mask], dim=0)
+        r_total = r_task * torch.exp(r_aux * 0.02)
+        return r_total

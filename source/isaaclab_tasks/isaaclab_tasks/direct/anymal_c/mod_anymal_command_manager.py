@@ -15,7 +15,7 @@ class CustomCommandManager:
         self._device = device
         self.cmd_cfg = cmd_cfg
         self.z_is_vel = z_is_vel
-        self.SITTING_HEIGHT = 0.2
+        self.SITTING_HEIGHT = 0.10
         self.WALKING_HEIGHT = 0.60
         self.PROB_SIT = cmd_cfg.prob_sit #0.5
         self.MAX_Z_VEL = 0.1
@@ -55,15 +55,18 @@ class CustomCommandManager:
         finished_unsitting_envs = unsitting_envs & ((self._time_doing_action > 50) | finished_trying_envs)  # (N), 1 second
         # finished_walking_envs = torch.logical_and(walking_envs, self._time_doing_action > 400) # (N), 10 seconds
         finished_walking_envs = walking_envs & ((self._time_doing_action > 400) | finished_trying_envs) # (N), 10 seconds
-        self._high_level_commands[finished_sitting_envs] = 1 # Make them unsit
-        self._high_level_commands[finished_unsitting_envs] = 0 # Make them sit walk
-        self._high_level_commands[finished_walking_envs] = -1 # Make them sit
-        self._time_doing_action[finished_sitting_envs] = 0
-        self._time_doing_action[finished_unsitting_envs] = 0
-        self._time_doing_action[finished_walking_envs] = 0
-        self.set_time_trying_command(finished_sitting_envs, boolmask=True)
-        self.set_time_trying_command(finished_unsitting_envs, boolmask=True)
-        self.set_time_trying_command(finished_walking_envs, boolmask=True)
+        new_sitting_envs = finished_walking_envs # finished_walking_envs # Make them unsit
+        new_unsitting_envs = finished_sitting_envs # finished_sitting_envs # Make them sit walk
+        new_walking_envs = finished_unsitting_envs # self._high_level_commands == 2 # finished_unsitting_envs # Make them sit, change command later
+        self._high_level_commands[new_unsitting_envs] = 1 
+        self._high_level_commands[new_walking_envs] = 0 
+        self._high_level_commands[new_sitting_envs] = -1 
+        self._time_doing_action[new_unsitting_envs] = 0
+        self._time_doing_action[new_walking_envs] = 0
+        self._time_doing_action[new_sitting_envs] = 0
+        self.set_time_trying_command(new_unsitting_envs, boolmask=True)
+        self.set_time_trying_command(new_walking_envs, boolmask=True)
+        self.set_time_trying_command(new_sitting_envs, boolmask=True)
         # self._time_trying_command[finished_sitting_envs].uniform_(300, 500) # Spend at most 500 steps trying to sit
         # self._time_trying_command[finished_unsitting_envs].uniform_(300, 500) # Spend at most 500 steps trying to unsit
         # self._time_trying_command[finished_walking_envs].uniform_(300, 500) # Spend at most 500 steps trying to walk
@@ -73,25 +76,26 @@ class CustomCommandManager:
         
         ### Update raw commands
         # Sitting raw commands
-        sitting_envs = self._high_level_commands == -1 # (N)
-        self._raw_commands[sitting_envs,:3] = 0.0
         if self.z_is_vel:
+            sitting_envs = self._high_level_commands == -1 # (N)
+            self._raw_commands[sitting_envs,:3] = 0.0
             error = self.SITTING_HEIGHT - robot.data.root_com_pos_w[sitting_envs,2] # negative if robot is above sitting height
             self._raw_commands[sitting_envs,3] = torch.clamp(error, -self.MAX_Z_VEL, self.MAX_Z_VEL)
-        else:
-            self._raw_commands[sitting_envs,3] = self.SITTING_HEIGHT
+        else: # Only update new sitting commands
+            self.set_random_sit_commands(new_sitting_envs, boolmask=True)
+            # self._raw_commands[sitting_envs,3] = self.SITTING_HEIGHT # (x_vel,y_vel,yaw_vel,z_height)
         # Unsitting raw commands
-        unsitting_envs = self._high_level_commands == 1 # (N)
-        self._raw_commands[unsitting_envs,:3] = 0.0
         if self.z_is_vel:
+            unsitting_envs = self._high_level_commands == 1 # (N)
+            self._raw_commands[unsitting_envs,:3] = 0.0
             error = self.WALKING_HEIGHT - robot.data.root_com_pos_w[unsitting_envs,2] # positive if robot is below walking height
             self._raw_commands[unsitting_envs,3] = torch.clamp(error, -self.MAX_Z_VEL, self.MAX_Z_VEL)
         else:
-            self._raw_commands[unsitting_envs,3] = self.WALKING_HEIGHT
+            # self._raw_commands[unsitting_envs,3] = self.WALKING_HEIGHT
+            self.set_random_unsit_commands(new_unsitting_envs, boolmask=True)
         # Walking raw commands
         # new_walking_envs = torch.logical_and(walking_envs, self._time_doing_action > 100) # (N)
-        new_walking_envs = torch.where(finished_unsitting_envs)[0] # Needs to be list of indices
-        self.set_random_walk_commands(new_walking_envs)
+        self.set_random_walk_commands(new_walking_envs, boolmask=True)
         
     def reset_commands(self, env_ids: torch.Tensor, robot: Articulation):
         """env_ids: (E)
@@ -104,15 +108,16 @@ class CustomCommandManager:
         
         ## Set random walking commands
         self._high_level_commands[walking_inds] = 0
-        self.set_random_walk_commands(walking_inds)
+        self.set_random_walk_commands(walking_inds, boolmask=False)
         
         ## Set sitting commands
         self._high_level_commands[sitting_inds] = -1
-        self._raw_commands[sitting_inds, :3] = 0.0
-        if self.z_is_vel:
-            self._raw_commands[sitting_inds, 3] = -self.MAX_Z_VEL
-        else:
-            self._raw_commands[sitting_inds, 3] = self.SITTING_HEIGHT
+        self.set_random_sit_commands(sitting_inds, boolmask=False)
+        # self._raw_commands[sitting_inds, :3] = 0.0
+        # if self.z_is_vel:
+        #     self._raw_commands[sitting_inds, 3] = -self.MAX_Z_VEL
+        # else:
+        #     self._raw_commands[sitting_inds, 3] = self.SITTING_HEIGHT
         # error = self.SITTING_HEIGHT - robot.data.root_com_pos_w[sitting_inds,2] # negative if robot is above sitting height
         # self._raw_commands[sitting_envs,3] = torch.clamp(error, -0.1, 0.1)
         
@@ -125,16 +130,47 @@ class CustomCommandManager:
         """env_ids: (E)
         boolmask: bool indicating whether env_ids is a boolean mask or not"""
         if boolmask:
-            self._time_trying_command[env_ids] = torch.zeros(size=(int(env_ids.sum().item()),), device=self._device).uniform_(300, 500)
+            self._time_trying_command[env_ids] = torch.zeros(size=(int(env_ids.sum().item()),), device=self._device).uniform_(400, 800)
         else:
-            self._time_trying_command[env_ids] = torch.zeros(size=(len(env_ids),), device=self._device).uniform_(300, 500)
+            self._time_trying_command[env_ids] = torch.zeros(size=(len(env_ids),), device=self._device).uniform_(400, 800)
         
-    def set_random_walk_commands(self, env_ids: torch.Tensor):
+    def set_random_walk_commands(self, env_ids: torch.Tensor, boolmask: bool):
         """env_ids: (E)
-        Note: env_ids should be a tensor of indices, not boolean mask"""
+        boolmask: bool indicating whether env_ids is a boolean mask or not"""
+        if boolmask:
+            env_ids = torch.where(env_ids)[0]
         
         self._raw_commands[env_ids] = torch.zeros(size=(len(env_ids), 4), device=self._device).uniform_(-1.0, 1.0)
-        self._raw_commands[env_ids,3] = 0.0 # z-axis velocity is 0.0
+        if self.z_is_vel:
+            self._raw_commands[env_ids,3] = 0.0 # z-axis command is 0.0 velocity
+        else:
+            self._raw_commands[env_ids,3] = self.WALKING_HEIGHT # z-axis command is walking height
+        
+    def set_random_sit_commands(self, env_ids: torch.Tensor, boolmask: bool):
+        """env_ids: (E)
+        boolmask: bool indicating whether env_ids is a boolean mask or not"""
+        if boolmask:
+            env_ids = torch.where(env_ids)[0]
+        
+        self._raw_commands[env_ids, :3] = 0.0
+        if self.z_is_vel:
+            self._raw_commands[env_ids, 3] = -self.MAX_Z_VEL
+        else:
+            self._raw_commands[env_ids, 3] = torch.zeros(size=(len(env_ids),), 
+                                device=self._device).uniform_(self.SITTING_HEIGHT, self.SITTING_HEIGHT+0.2)
+            
+    def set_random_unsit_commands(self, env_ids: torch.Tensor, boolmask: bool):
+        """env_ids: (E)
+        boolmask: bool indicating whether env_ids is a boolean mask or not"""
+        if boolmask:
+            env_ids = torch.where(env_ids)[0]
+
+        self._raw_commands[env_ids, :3] = 0.0
+        if self.z_is_vel:
+            self._raw_commands[env_ids, 3] = self.MAX_Z_VEL
+        else:
+            self._raw_commands[env_ids, 3] = self.WALKING_HEIGHT
+            # torch.zeros(size=(len(env_ids), 4), device=self._device).uniform_(self.SITTING_HEIGHT, self.WALKING_HEIGHT)
         
     def get_commands(self) -> torch.Tensor:
         return self._raw_commands
