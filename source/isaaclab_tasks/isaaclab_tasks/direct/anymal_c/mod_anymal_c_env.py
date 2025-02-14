@@ -165,7 +165,8 @@ class ModAnymalCEnv(DirectRLEnv):
         # self._static_anymal.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
         
         ### Sample new commands
-        self.command_manager.reset_commands(env_ids, self._robot)
+        # self.command_manager.reset_commands(env_ids, self._robot)
+        self.command_manager.reset_commands2(env_ids, self._robot)
         
         # Logging
         extras = dict()

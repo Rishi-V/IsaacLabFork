@@ -10,52 +10,29 @@ from .mod_anymal_c_env_cfg import CommandCfg, CustomCommandCfg
 # from isaaclab.envs.mdp.commands.velocity_command import UniformVelocityCommand # Contains example of marker
 
 class CustomCommandManager:
-    def __init__(self, num_envs: int, device: torch.device, cmd_cfg: CommandCfg, z_is_vel: bool):
+    def __init__(self, num_envs: int, device: torch.device, cmd_cfg: CustomCommandCfg, z_is_vel: bool):
         self._num_envs = num_envs
         self._device = device
         self.cmd_cfg = cmd_cfg
         self.z_is_vel = z_is_vel
         self.SITTING_HEIGHT = 0.10
         self.WALKING_HEIGHT = 0.60
-        self.PROB_SIT = cmd_cfg.prob_sit #0.5
+        # self.PROB_SIT = cmd_cfg.prob_sit #0.5
         self.MAX_Z_VEL = 0.1
         
         self._high_level_commands = torch.zeros(size=(self._num_envs,), device=self._device) # (N); -1=sit, 1=unsit, 0=walk
         self._raw_commands = torch.zeros(size=(self._num_envs, 4), device=self._device) # (N,4); (x,y,yaw,z) velocities or positions
         self._time_doing_action = torch.zeros(size=(self._num_envs,), device=self._device) # (N); Time spent doing action
         self._time_trying_command = torch.zeros(size=(self._num_envs,), device=self._device) # (N); Time spent trying to do action
-        self._hl_sequence = torch.zeros(size=(self._num_envs,10,6), device=self._device) # (N,T,6)
-        self._hl_indices = torch.zeros(size=(self._num_envs,), device=self._device, dtype=torch.int) # (N)
         
-    # def parse_cfg_to_custom_command_sequence(self, cmd_cfg: CustomCommandCfg):
-    #     max_cmd_length = cmd_cfg.max_cmd_length
-    #     cmd_list = cmd_cfg.cmd_list
+        ## Custom command sequence
+        num_max_commands = cmd_cfg.max_cmd_length + 1 # +1 for done command
+        self._hl_sequence = torch.zeros(size=(self._num_envs, num_max_commands, 8), device=self._device) # (N,T,8)
+        self._hl_indices = torch.zeros(size=(self._num_envs,), device=self._device, dtype=torch.long) # (N)
         
-    #     # hl_seq_tensor = torch.zeros(size=(self._num_envs, max_cmd_length, 8), device=self._device) # (N,T,8)
-    #     # for cmd_seq in cmd_list:
-    #     #     cmd_seq, prob = cmd_seq
-    #     #     num_envs = int(prob * self._num_envs)
-    #     #     for cmd in cmd_seq: # cmd is one of ["sit", "unsit", "walk"]
-                
-            
-    #     #     cmd_seq = [self.parse_cmd_to_custom_command(cmd) for cmd in cmd_seq]
-    #     #     cmd_seq = torch.tensor(cmd_seq, device=self._device)
+        self.parse_cfg_to_custom_command_sequence(cmd_cfg)
         
-    def reset_commands2(self, env_ids: torch.Tensor, robot: Articulation):
-        """env_ids: (E)
-        Note: env_ids should be a tensor of indices, not boolean mask"""
-        self._hl_indices[env_ids] = 0
-        self._time_doing_action[env_ids] = 0
-        
-        ### Resample hl_sequence based on cmd_cfg
-        rand_sequence = (-1, 1, 0) # ["sit", "unsit", "walk"]
-        self._hl_sequence[env_ids] = torch.zeros(size=(len(env_ids), 10, 8), device=self._device) # (E,T,8)
-        self._hl_sequence[env_ids, :3, self.CC_IND_HL] = torch.tensor(rand_sequence, device=self._device).repeat(len(env_ids), 1)
-        self._hl_sequence[env_ids, :3, self.CC_IND_SAMPLE_OR_DONE] = 0 # 0=sample raw commands
-                
-        self._time_trying_command[env_ids] = self._hl_sequence[env_ids, 0, self.CC_IND_TIMEOUT]
-        
-    def set_custom_command_sequence(self, high_level_command_sequence: torch.Tensor):
+    def parse_cfg_to_custom_command_sequence(self, cmd_cfg: CustomCommandCfg):
         """high_level_command_sequence: (N,T,8)
         - 8: (high_level_index, timeout, sample_or_done, x_vel, y_vel, yaw_vel, z_height)
         - high_level_index: -1=sit, 1=unsit, 0=walk
@@ -70,7 +47,60 @@ class CustomCommandManager:
         self.CC_IND_SAMPLE_OR_DONE = 3
         self.CC_IND_RAW_ACTIONS = 4
         
-        self._hl_sequence = high_level_command_sequence # (N,T,6)
+        max_cmd_length = cmd_cfg.max_cmd_length # This is Tmax-1, we add the done command later
+        cmd_list = cmd_cfg.cmd_list
+        
+        cmd_idx_to_tensor = torch.zeros(size=(len(cmd_list), max_cmd_length+1, 8), device=self._device) # (NumCommands,Tmax,8)
+        self._sample_probs = torch.zeros(size=(len(cmd_list),), device=self._device) # (NumCommands)
+        for i, cmd_seq_with_prob in enumerate(cmd_list):
+            cmd_seq, prob = cmd_seq_with_prob
+            self._sample_probs[i] = prob
+            cmd_seq = [self.map_str_to_tensor(cmd) for cmd in cmd_seq] # (Tcur-1,8)
+            cmd_seq.append(self.map_str_to_tensor("done")) # (Tcur<Tmax,8)
+            cmd_seq = torch.stack(cmd_seq) # Tensor (Tcur,8)
+            cmd_idx_to_tensor[i, :len(cmd_seq), :] = cmd_seq # (Tcur,8)
+        self._cmd_idx_to_tensor = cmd_idx_to_tensor # (NumCommands,Tmax,8)
+    
+    def map_str_to_tensor(self, cmd_str: str):
+        """cmd_str: [sit, unsit, walk, r_sit, r_unsit, r_walk, done]
+        Returns: (high_level_index, timeout, timehold, sample_or_done, x_vel, y_vel, yaw_vel, z_height)
+        """
+        if cmd_str == "sit":
+            return torch.tensor([-1, 400, 50, 1, 0, 0, 0, self.SITTING_HEIGHT], device=self._device)
+        elif cmd_str == "r_sit":
+            return torch.tensor([-1, 400, 50, 0, 0, 0, 0, self.SITTING_HEIGHT], device=self._device)
+        elif cmd_str == "unsit":
+            return torch.tensor([1, 400, 50, 1, 0, 0, 0, self.WALKING_HEIGHT], device=self._device)
+        elif cmd_str == "r_unsit":
+            return torch.tensor([1, 400, 50, 0, 0, 0, 0, self.WALKING_HEIGHT], device=self._device)
+        elif cmd_str == "walk":
+            return torch.tensor([0, 400, 400, 1, 1, 0, 0, self.WALKING_HEIGHT], device=self._device)
+        elif cmd_str == "r_walk":
+            return torch.tensor([0, 400, 400, 0, 0, 0, 0, 0], device=self._device)
+        elif cmd_str == "done":
+            return torch.tensor([0, 0, 0, 2, 0, 0, 0, 0], device=self._device)
+        else:
+            raise ValueError(f"Unknown command: {cmd_str}")
+        
+    def resample_hl_sequence(self, env_ids: torch.Tensor, robot: Articulation):
+        """env_ids: (E)
+        Note: env_ids should be a tensor of indices, not boolean mask"""
+        self._hl_indices[env_ids] = 0
+        self._time_doing_action[env_ids] = 0
+        
+        ### Sample cmd indices
+        cmd_inds = torch.multinomial(self._sample_probs, len(env_ids), replacement=True) # (E)
+        self._hl_sequence[env_ids] = self._cmd_idx_to_tensor[cmd_inds] # (E,T,8)
+        
+        # ### Resample hl_sequence based on cmd_cfg
+        # rand_sequence = (-1, 1, 0) # ["sit", "unsit", "walk"]
+        # self._hl_sequence[env_ids] = torch.zeros(size=(len(env_ids), 10, 8), device=self._device) # (E,T,8)
+        # self._hl_sequence[env_ids, :3, self.CC_IND_HL] = torch.tensor(rand_sequence, device=self._device).repeat(len(env_ids), 1)
+        # self._hl_sequence[env_ids, :3, self.CC_IND_SAMPLE_OR_DONE] = 0 # 0=sample raw commands
+        # self._time_trying_command[env_ids] = self._hl_sequence[env_ids, 0, self.CC_IND_TIMEOUT]
+        
+    def set_custom_command_sequence(self, high_level_command_sequence: torch.Tensor):
+        self._hl_sequence = high_level_command_sequence # (N,T,8)
         self._hl_indices = torch.zeros(size=(self._num_envs,), device=self._device) # (N)
         
     def update_time_doing_action2(self, robot: Articulation):
@@ -100,34 +130,42 @@ class CustomCommandManager:
         finished_envs |= self._time_doing_action > self._hl_sequence[:, self._hl_indices, self.CC_IND_TIMEHOLD] # (N)
         return finished_envs        
 
-    def update_hl_commands2(self, finished_env: torch.Tensor, robot: Articulation):
-        """finished_env: (N), boolmask"""
-        finished_env_inds = torch.where(finished_env)[0] # (E)
-        self._hl_indices[finished_env_inds] += 1
-        next_hl_inds = self._hl_indices[finished_env_inds] # (E)
-        self._time_trying_command[finished_env_inds] = self._hl_sequence[finished_env_inds, next_hl_inds, self.CC_IND_TIMEOUT] # (E)
+    def update_hl_commands2(self, env_inds: torch.Tensor, robot: Articulation, finished_not_reset: bool):
+        """finished_env_inds: (N) or (E) depending on boolmask"""
+        if finished_not_reset:
+            env_inds = torch.where(env_inds)[0] # (E)
+            
+            self._hl_indices[env_inds] += 1
+            next_hl_inds = self._hl_indices[env_inds] # (E)
+    
+            ### Restart sequence for done envsl must be done before setting raw commands
+            sample_or_done = self._hl_sequence[env_inds, next_hl_inds, self.CC_IND_SAMPLE_OR_DONE] # (E)
+            done_envs = env_inds[sample_or_done == 2] # (E_done)
+            if len(done_envs) > 0:
+                self.resample_hl_sequence(done_envs, robot=robot)
+        else:
+            self.resample_hl_sequence(env_inds, robot=robot)
+            
+        next_hl_inds = self._hl_indices[env_inds] # (E) # Update next_hl_inds as some would be set to 0
+        self._time_doing_action[env_inds] = 0 # (E)
+        self._time_trying_command[env_inds] = self._hl_sequence[env_inds, next_hl_inds, self.CC_IND_TIMEOUT] # (E)
         
-        next_hl_command = self._hl_sequence[finished_env_inds, next_hl_inds, self.CC_IND_HL] # (E)
-        sample_or_done = self._hl_sequence[finished_env_inds, next_hl_inds, self.CC_IND_SAMPLE_OR_DONE] # (E)
-        raw_commands = self._hl_sequence[finished_env_inds, next_hl_inds, self.CC_IND_RAW_ACTIONS:] # (E,4)
+        ### Set next high-level commands and raw commands; done after reset so will incorporate reset commands
+        next_hl_command = self._hl_sequence[env_inds, next_hl_inds, self.CC_IND_HL] # (E)
+        self._high_level_commands[env_inds] = next_hl_command # (E)
+        self._raw_commands[env_inds] = self._hl_sequence[env_inds, next_hl_inds, self.CC_IND_RAW_ACTIONS:] # (E,4)
         
-        ### Restart sequence for done envs
-        done_envs = finished_env_inds[sample_or_done == 2] # (E_done)
-        self.reset_commands(done_envs, robot=robot)
-        
-        ### Set fixed raw commands
-        fixed_envs = finished_env_inds[sample_or_done == 1] # (E_fixed)
-        self._raw_commands[fixed_envs] = raw_commands[fixed_envs] # (E_fixed,4)
-        
-        ### Set randomly sampled raw commands
+        ### Set randomly sampled raw commands. This will overwrite some of the raw commands above
+        sample_or_done = self._hl_sequence[env_inds, next_hl_inds, self.CC_IND_SAMPLE_OR_DONE] # (E)
         sample_envs = sample_or_done == 0 # (E)
         random_sit_envs = sample_envs & (next_hl_command == -1) # (E)
         random_unsit_envs = sample_envs & (next_hl_command == 1) # (E)
         random_walk_envs = sample_envs & (next_hl_command == 0) # (E)
-        self.set_random_sit_commands(finished_env_inds[random_sit_envs], boolmask=False)
-        self.set_random_unsit_commands(finished_env_inds[random_unsit_envs], boolmask=False)
-        self.set_random_walk_commands(finished_env_inds[random_walk_envs], boolmask=False)
+        self.set_random_sit_commands(env_inds[random_sit_envs], boolmask=False)
+        self.set_random_unsit_commands(env_inds[random_unsit_envs], boolmask=False)
+        self.set_random_walk_commands(env_inds[random_walk_envs], boolmask=False)
         
+    
     def update_raw_commands_based_on_robot2(self, robot: Articulation):
         """Update raw commands based on the robot's current state.        
         """
@@ -148,9 +186,14 @@ class CustomCommandManager:
     def update_commands2(self, robot: Articulation):
         self.update_time_doing_action2(robot) # Updates time_doing_action based on the robot and high_level_commands
         finished_envs = self.get_finished_envs2() # Gets envs that finished holding or timed out
-        self.update_hl_commands2(finished_envs, robot) # Updates high_level_commands, raw_commands, and time_trying_command based on finished_envs
+        self.update_hl_commands2(finished_envs, robot, finished_not_reset=True) # Updates high_level_commands, raw_commands, and time_trying_command based on finished_envs
         self.update_raw_commands_based_on_robot2(robot) # Updates raw_commands based on the robot and high_level_commands
         
+    def reset_commands2(self, env_ids: torch.Tensor, robot: Articulation):
+        """env_ids: (E)
+        Note: env_ids should be a tensor of indices, not boolean mask"""
+        self.update_hl_commands2(env_ids, robot, finished_not_reset=False) # Updates high_level_commands, raw_commands, and time_trying_command based on finished_envs
+        self.update_raw_commands_based_on_robot2(robot) # Updates raw_commands based on the robot and high_level_commands
         
     def update_commands(self, robot: Articulation):
         self._time_trying_command -= 1

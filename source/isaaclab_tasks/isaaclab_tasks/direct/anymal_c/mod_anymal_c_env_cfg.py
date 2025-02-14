@@ -234,6 +234,7 @@ class ModAnymalCFlatEnvCfg(DirectRLEnvCfg):
     # feet_air_time_reward_scale = 0.5
     # undesired_contact_reward_scale = -10.0 # RVMod: Originally -1.0
     # flat_orientation_reward_scale = -5.0
-    command_cfg: CommandCfg = CommandCfg()
+    # command_cfg: CommandCfg = CommandCfg()
+    command_cfg: CustomCommandCfg = CustomCommandCfg()
     walking_reward_cfg: WalkingRewardCfg = WalkingRewardCfg()
     situnsit_reward_cfg: SitUnsitRewardCfg = SitUnsitRewardCfg()
