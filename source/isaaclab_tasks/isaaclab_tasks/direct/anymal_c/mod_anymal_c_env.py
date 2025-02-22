@@ -14,7 +14,7 @@ from isaaclab.envs import DirectRLEnv
 from isaaclab.sensors import ContactSensor, RayCaster
 
 from .mod_anymal_c_env_cfg import ModAnymalCFlatEnvCfg, WalkingRewardCfg, SitUnsitRewardCfg
-from .mod_anymal_command_manager import CustomCommandManager
+from .mod_anymal_command_manager import CustomCommandManager, DynamicSkillManager
 from .mod_anymal_reward_manager import CustomRewardManager
 
 ## Visualizations
@@ -42,14 +42,16 @@ class ModAnymalCEnv(DirectRLEnv):
         ) # (N,12)
 
         # Command manager
-        z_is_vel = cfg.situnsit_reward_cfg.z_is_vel
-        self.command_manager = CustomCommandManager(self.num_envs, self.device, cfg.command_cfg, z_is_vel=z_is_vel)
-        self._commands = self.command_manager.get_commands()
+        # z_is_vel = cfg.situnsit_reward_cfg.z_is_vel
+        # self.command_manager = CustomCommandManager(self.num_envs, self.device, cfg.command_cfg, z_is_vel=z_is_vel)
+        # self._commands = self.command_manager.get_commands()
+        self.skill_manager = DynamicSkillManager(self.num_envs, self.device)
+        self.skill_manager.parse_cfg(cfg.dynamic_skill_cfg)
 
         # Reward manager
-        self.reward_manager = CustomRewardManager(self.num_envs, self.device, self.command_manager, 
-                                                  cfg.walking_reward_cfg, cfg.situnsit_reward_cfg,
-                                                  z_is_vel)
+        # self.reward_manager = CustomRewardManager(self.num_envs, self.device, self.command_manager, 
+        #                                           cfg.walking_reward_cfg, cfg.situnsit_reward_cfg,
+        #                                           z_is_vel)
 
         # Logging
         # self._episode_sums = {
@@ -104,7 +106,9 @@ class ModAnymalCEnv(DirectRLEnv):
         self._robot.set_joint_position_target(self._processed_actions)
 
     def _get_observations(self) -> dict:
-        self.command_manager.update_commands(self._robot) # Update actions before getting observations
+        self.skill_manager.update(self._robot)
+        raw_commands = self.skill_manager.get_raw_commands()
+        # self.command_manager.update_commands(self._robot) # Update actions before getting observations
         self._previous_actions = self._actions.clone()
         # height_data = (
         #     self._height_scanner.data.pos_w[:, 2].unsqueeze(1) - self._height_scanner.data.ray_hits_w[..., 2] - 0.5
@@ -112,7 +116,8 @@ class ModAnymalCEnv(DirectRLEnv):
         obs = torch.cat([self._robot.data.root_lin_vel_b, # (N,3): Remove from actor (critic is okay)
                     self._robot.data.root_ang_vel_b, # (N,3)
                     self._robot.data.projected_gravity_b, # (N,3)
-                    self.command_manager.get_commands(), # (N,4)
+                    # self.command_manager.get_commands(), # (N,4)
+                    raw_commands, # (N,4)
                     self._robot.data.joint_pos - self._robot.data.default_joint_pos, # (N,12)
                     self._robot.data.joint_vel, # (N,12)
                     # height_data,
@@ -123,18 +128,21 @@ class ModAnymalCEnv(DirectRLEnv):
         return observations
     
     def _get_rewards(self) -> torch.Tensor:
-        self._commands = self.command_manager.get_commands()
-        rewards = self.reward_manager.compute_rewards(self._robot, self._actions, self._previous_actions, self._contact_sensor, 
-                                            self.step_dt, self._feet_ids, self._undesired_contact_body_ids)
+        # self._commands = self.command_manager.get_commands()
+        # rewards = self.reward_manager.compute_rewards(self._robot, self._actions, self._previous_actions, self._contact_sensor, 
+        #                                     self.step_dt, self._feet_ids, self._undesired_contact_body_ids)
+        rewards = self.skill_manager.compute_rewards(self._robot, self._actions, self._previous_actions, self._contact_sensor,
+                                                        self.step_dt, self._feet_ids, self._undesired_contact_body_ids)
         return rewards
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         time_out = self.episode_length_buf >= self.max_episode_length - 1
-        # net_contact_forces = self._contact_sensor.data.net_forces_w_history
-        # died = torch.any(torch.max(torch.norm(net_contact_forces[:, :, self._base_id], dim=-1), dim=1)[0] > 1.0, dim=1)
-        tipping_threshold = 0.8  # Define a tipping threshold, note that torch.norm(projected_gravity_b) is 1.0
-        died = torch.norm(self._robot.data.projected_gravity_b[:, :2], dim=1) > tipping_threshold
-        return died, time_out
+        # # net_contact_forces = self._contact_sensor.data.net_forces_w_history
+        # # died = torch.any(torch.max(torch.norm(net_contact_forces[:, :, self._base_id], dim=-1), dim=1)[0] > 1.0, dim=1)
+        # tipping_threshold = 0.8  # Define a tipping threshold, note that torch.norm(projected_gravity_b) is 1.0
+        # died = torch.norm(self._robot.data.projected_gravity_b[:, :2], dim=1) > tipping_threshold
+        # return died, time_out
+        return self.skill_manager.get_should_reset(self._robot), time_out
 
     def _reset_idx(self, env_ids: torch.Tensor | None):
         if env_ids is None or len(env_ids) == self.num_envs:
@@ -166,14 +174,15 @@ class ModAnymalCEnv(DirectRLEnv):
         
         ### Sample new commands
         # self.command_manager.reset_commands(env_ids, self._robot)
-        self.command_manager.reset_commands2(env_ids, self._robot)
+        # self.command_manager.reset_commands2(env_ids, self._robot)
+        self.skill_manager.reset(env_ids, self._robot)
         
         # Logging
         extras = dict()
-        for key in self.reward_manager.episode_sums.keys():
-            episodic_sum_avg = torch.mean(self.reward_manager.episode_sums[key][env_ids])
-            extras["Episode_Reward/" + key] = episodic_sum_avg / self.max_episode_length_s
-            self.reward_manager.episode_sums[key][env_ids] = 0.0
+        # for key in self.reward_manager.episode_sums.keys():
+        #     episodic_sum_avg = torch.mean(self.reward_manager.episode_sums[key][env_ids])
+        #     extras["Episode_Reward/" + key] = episodic_sum_avg / self.max_episode_length_s
+        #     self.reward_manager.episode_sums[key][env_ids] = 0.0
         self.extras["log"] = dict()
         self.extras["log"].update(extras)
         extras = dict()
@@ -208,9 +217,11 @@ class ModAnymalCEnv(DirectRLEnv):
 
 
     def _set_debug_vis_impl(self, debug_vis: bool):
-        self.command_manager.set_debug_vis_impl(debug_vis)
+        # self.command_manager.set_debug_vis_impl(debug_vis)
+        self.skill_manager.set_debug_vis_impl(debug_vis)
         
     def _debug_vis_callback(self, event):
-        self.command_manager.debug_vis_callback(self._robot)
+        # self.command_manager.debug_vis_callback(self._robot)
+        self.skill_manager.debug_vis_callback(self._robot)
 
         

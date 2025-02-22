@@ -21,6 +21,8 @@ from isaaclab.utils import configclass
 from isaaclab_assets.robots.anymal import ANYMAL_C_CFG  # isort: skip
 from isaaclab.terrains.config.rough import ROUGH_TERRAINS_CFG  # isort: skip
 import torch
+# from .mod_anymal_command_manager import AbstractCommand, WalkCommand, SitCommand
+from .mod_anymal_command_manager import AbstractSkill, WalkSkill, ReachZSkill
 
 
 @configclass
@@ -59,9 +61,14 @@ class CommandCfg:
     
 @configclass
 class CustomCommandCfg:
-    max_cmd_length = 4
-    cmd_list = [(("r_sit", "r_unsit", "r_walk"), 0.45), (("r_walk", "r_sit", "r_unsit"), 0.5),
+    max_cmd_length: int = 4
+    cmd_list: list[tuple[tuple, float]] = [(("r_sit", "r_unsit", "r_walk"), 0.45), (("r_walk", "r_sit", "r_unsit"), 0.5),
                 (("walk", "unsit", "sit", "walk"), 0.05)]
+    
+@configclass
+class DynamicCommandCfg:
+    # commands is a list of commands and their probabilities
+    commands: list[tuple[AbstractCommand, float]] = [(SitCommand(), 0.5), (WalkCommand(), 0.5)]
     
 #endregion
 ######################### End Command Configurations ####################
@@ -153,6 +160,11 @@ class SitUnsitRewardCfg:
 ######################### End Reward Configurations ####################
 ########################################################################
 
+@configclass
+class DynamicSkillCfg:
+    skills: list[tuple[AbstractSkill, float]] = [
+        (WalkSkill(timeout=200, dir=(0,0,0), holdtime=50, randomize=True), 0.5),
+        (ReachZSkill(timeout=200, holdtime=50, ztarget_type="random"), 0.5)]
 
 @configclass
 class ModAnymalCFlatEnvCfg(DirectRLEnvCfg):
@@ -235,6 +247,7 @@ class ModAnymalCFlatEnvCfg(DirectRLEnvCfg):
     # undesired_contact_reward_scale = -10.0 # RVMod: Originally -1.0
     # flat_orientation_reward_scale = -5.0
     # command_cfg: CommandCfg = CommandCfg()
-    command_cfg: CustomCommandCfg = CustomCommandCfg()
-    walking_reward_cfg: WalkingRewardCfg = WalkingRewardCfg()
-    situnsit_reward_cfg: SitUnsitRewardCfg = SitUnsitRewardCfg()
+    # command_cfg: CustomCommandCfg = CustomCommandCfg()
+    # walking_reward_cfg: WalkingRewardCfg = WalkingRewardCfg()
+    # situnsit_reward_cfg: SitUnsitRewardCfg = SitUnsitRewardCfg()
+    dynamic_skill_cfg: DynamicSkillCfg = DynamicSkillCfg()

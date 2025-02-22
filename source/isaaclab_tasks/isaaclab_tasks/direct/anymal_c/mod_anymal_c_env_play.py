@@ -97,6 +97,8 @@ algorithm = args_cli.algorithm.lower()
 ### RVMod
 from isaaclab.assets import Articulation
 from isaaclab_tasks.direct.anymal_c.mod_anymal_c_env import ModAnymalCEnv
+from isaaclab_tasks.direct.anymal_c.mod_anymal_c_env_cfg import CustomCommandCfg
+from isaaclab_tasks.direct.anymal_c.mod_anymal_command_manager import CustomCommandManager
 from abc import ABC, abstractmethod
 """
 taskset -c 80-120 python source/isaaclab_tasks/isaaclab_tasks/direct/anymal_c/mod_anymal_c_env_play.py \
@@ -263,23 +265,31 @@ def main():
     runner.agent.load(resume_path)
     # set agent to evaluation mode
     runner.agent.set_running_mode("eval")
+    
+    # Set custom command sequence
+    custom_command_cfg = CustomCommandCfg(
+        max_cmd_length = 4,
+        cmd_list = [(("walk", "unsit", "sit", "walk"), 1)]
+    )
+    
+    underlying_env: ModAnymalCEnv = env._unwrapped
+    underlying_env.command_manager.parse_cfg_to_custom_command_sequence(custom_command_cfg)
 
     # reset environment
     obs, _ = env.reset()
     timestep = 0
-    underlying_env: ModAnymalCEnv = env._unwrapped
     
     # Create command manager
-    device = underlying_env.device
-    WALK_TIME = 500
-    command_manager = PlayCommandManager([
-        WalkCommand(device, (1.0, 0.0, 0.0), WALK_TIME),
-        SitUnsitCommand(device, True),
-        SitUnsitCommand(device, False),
-        WalkCommand(device, (-1.0, 0.0, 0.0), WALK_TIME),
-        SitUnsitCommand(device, True),
-        SitUnsitCommand(device, False),
-    ])
+    # device = underlying_env.device
+    # WALK_TIME = 500
+    # command_manager = PlayCommandManager([
+    #     WalkCommand(device, (1.0, 0.0, 0.0), WALK_TIME),
+    #     SitUnsitCommand(device, True),
+    #     SitUnsitCommand(device, False),
+    #     WalkCommand(device, (-1.0, 0.0, 0.0), WALK_TIME),
+    #     SitUnsitCommand(device, True),
+    #     SitUnsitCommand(device, False),
+    # ])
     
     # simulate environment
     while simulation_app.is_running():
@@ -289,7 +299,7 @@ def main():
         # run everything in inference mode
         with torch.inference_mode():
             # agent stepping
-            command = command_manager.get_current_command(underlying_env._robot)
+            # command = command_manager.get_current_command(underlying_env._robot)
             outputs = runner.agent.act(obs, timestep=0, timesteps=0)
             actions = outputs[-1].get("mean_actions", outputs[0])
             # env stepping
