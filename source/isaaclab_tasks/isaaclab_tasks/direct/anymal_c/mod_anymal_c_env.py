@@ -23,7 +23,7 @@ from .mod_anymal_command_manager import DynamicSkillManager
 # import isaaclab.utils.math as math_utils
 # # from isaaclab.envs.mdp.commands.velocity_command import UniformVelocityCommand # Contains example of marker
 
-"""taskset -c 80-120 python scripts/reinforcement_learning/skrl/train.py --task=Isaac-Velocity-Mod-Flat-Anymal-C-Direct-v0 \
+"""taskset -c 40-79 python scripts/reinforcement_learning/skrl/train.py --task=Isaac-Velocity-Mod-Flat-Anymal-C-Direct-v0 \
 --headless --video --video_length=600 --video_interval=10000 --num_envs=1024"""
 
 

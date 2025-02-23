@@ -13,11 +13,19 @@ from abc import ABC, abstractmethod
 from isaaclab.utils import configclass
 import pdb
 
+def assertIndicesNotBoolmask(env_ids: torch.Tensor):
+    # assert env_ids.dtype == torch.long, "env_ids should be a tensor of indices, not a boolean mask"
+    pass
+    
+def convertBoolmaskToIndices(env_ids: torch.Tensor):
+    return torch.where(env_ids)[0]
+
 class AbstractSkill(ABC):
     WALKING_HEIGHT = 0.6
     SITTING_HEIGHT = 0.2
     
     def __init__(self, timeout: float, dts_memory=100):
+        assert timeout > 0, "Timeout must be greater than 0"
         self._num_envs: int
         self._device: torch.device
         self._timeout = timeout
@@ -182,12 +190,13 @@ class WalkSkill(AbstractSkill):
         self._raw_commands[:, 3] = AbstractSkill.WALKING_HEIGHT
     
     def set_new_internals(self, env_ids: torch.Tensor, robot: Articulation) -> None:
+        assertIndicesNotBoolmask(env_ids)
         if self._randomize:
             # Randomly sample from [-1,1] for x,y,yaw
             self._raw_commands[env_ids, :3] = torch.rand(size=(len(env_ids), 3), device=self._device) * 2 - 1
         else:
             self._raw_commands[env_ids, :3] = torch.tensor(self.dir, device=self._device).repeat(len(env_ids), 1)
-        # Note: Don't need to set the z-axis command as it is always the same from __init__
+        # Note: Don't need to set the z-axis command as it is always the same from 
         self._current_timestep[env_ids] = 0
         
     def get_raw_command(self, env_ids: torch.Tensor) -> torch.Tensor:
@@ -323,7 +332,7 @@ class ReachZSkill(AbstractSkill):
         self._raw_commands = torch.zeros(size=(num_envs, 4), device=self._device)
 
     def set_new_internals(self, env_ids: torch.Tensor, robot: Articulation) -> None:
-        """env_ids: (E)"""
+        assertIndicesNotBoolmask(env_ids)
         if self._ztarget_type == "random":
             self._sitting_height[env_ids] = AbstractSkill.SITTING_HEIGHT + torch.rand(size=(len(env_ids),), device=self._device) * 0.2
         elif self._ztarget_type == "sitting":
@@ -423,8 +432,19 @@ class ReachZSkill(AbstractSkill):
     
     
     
+@configclass
+class SequenceOfSkillsCfg:
+    skill_sequence = [
+        ("ReachZSkill", ReachZSkillCfg(timeout=400, ztarget_type="random", holdtime=50)),
+        ("ReachZSkill", ReachZSkillCfg(timeout=400, ztarget_type="walking", holdtime=50))]
+    dts_memory = 100
+    
 class SequenceOfSkills(AbstractSkill):
-    def __init__(self, timeout: float, skill_sequence: list[AbstractSkill], dts_memory=100):
+    def __init__(self, skill_sequence: list[AbstractSkill], dts_memory=100):
+        timeout = 0
+        for skill in skill_sequence:
+            timeout += skill._timeout
+        assert timeout > 0, "Timeout must be greater than 0"
         super().__init__(timeout, dts_memory)
         self._skill_sequence = skill_sequence
         # self._env_to_skill_index stores the index of the current skill for each env
@@ -438,7 +458,7 @@ class SequenceOfSkills(AbstractSkill):
         self._env_to_skill_index = torch.zeros(size=(num_envs,), device=self._device, dtype=torch.long)
         
     def set_new_internals(self, env_ids: torch.Tensor, robot: Articulation) -> None:
-        """env_ids: (E)"""
+        assertIndicesNotBoolmask(env_ids)
         self._env_to_skill_index[env_ids] = 0
         self._skill_sequence[0].set_new_internals(env_ids, robot)
             
@@ -473,8 +493,7 @@ class SequenceOfSkills(AbstractSkill):
             if skill_env_ids.any():
                 skill.update(skill_env_ids, robot)
                 # If skill is finished, move to next skill
-                finished_subskill = skill.get_successes(skill_env_ids, robot) # (N) boolean
-                increment_envs |= finished_subskill
+                increment_envs[skill_env_ids] = skill.get_successes(skill_env_ids, robot) # (E) boolean
                 
         ### Increment envs that finished a skill and set new internals for the next skill
         # Note: Finishing the last skill will increment the index but will not set new internals
@@ -482,7 +501,7 @@ class SequenceOfSkills(AbstractSkill):
         for i, skill in enumerate(self._skill_sequence):
             new_skill_envs = increment_envs & (self._env_to_skill_index == i) # (N)
             if new_skill_envs.any():
-                skill.set_new_internals(new_skill_envs, robot)
+                skill.set_new_internals(convertBoolmaskToIndices(new_skill_envs), robot)
         
         # Clamp the index to the last skill
         self._env_to_skill_index[env_ids] = torch.clamp(self._env_to_skill_index[env_ids], 0, len(self._skill_sequence) - 1)
@@ -507,15 +526,35 @@ class SequenceOfSkills(AbstractSkill):
             if skill_env_ids.any():
                 rewards[skill_env_ids] = skill.compute_rewards(skill_env_ids, robot, actions, previous_actions,
                                                                 contact_sensor, step_dt, feet_ids, undesired_contact_body_ids)
-        assert torch.all(rewards != 0), "All rewards should be non-zero"
+        assert torch.all(rewards[env_ids] != 0), "All rewards should be non-zero"
         return rewards[env_ids]
     
     
 @configclass
 class DynamicSkillCfg:
+    # skills: list[tuple[str, configclass, float]] = [
+    #     ("WalkSkill", WalkSkillCfg(), 0.5),
+    #     # ("WalkSkill", WalkSkillCfg(), 0.5),
+    #     # ("ReachZSkill", ReachZSkillCfg(), 0.5)
+    #     ]
+    
     skills: list[tuple[str, configclass, float]] = [
         ("WalkSkill", WalkSkillCfg(), 0.5),
-        ("ReachZSkill", ReachZSkillCfg(), 0.5)]
+        ("SequenceOfSkillsCfg", SequenceOfSkillsCfg(), 0.5)]
+    
+def parse_cfg_skills(skill_name, skill_cfg) -> AbstractSkill:
+    if skill_name == "WalkSkill":
+        skill_cfg["reward_cfg"] = WalkSkillRewardCfg(**skill_cfg["reward_cfg"])
+        skill = WalkSkill(**skill_cfg)
+    elif skill_name == "ReachZSkill":
+        skill_cfg["reward_cfg"] = ReachZSkillRewardCfg(**skill_cfg["reward_cfg"])
+        skill = ReachZSkill(**skill_cfg)
+    elif skill_name == "SequenceOfSkillsCfg":
+        skill_cfg["skill_sequence"] = [parse_cfg_skills(skill_name, skill_cfg) for skill_name, skill_cfg in skill_cfg["skill_sequence"]]
+        skill = SequenceOfSkills(**skill_cfg)
+    else:
+        raise ValueError(f"Unknown skill name: {skill_name}")
+    return skill
     
 class DynamicSkillManager:
     def __init__(self, num_envs: int, device: torch.device):
@@ -529,14 +568,7 @@ class DynamicSkillManager:
         self._probs.clear()
         for skill_name, skill_cfg, prob in skills_cfg.skills:
             # Note: For some reason skill_cfg is a dict, so we need to convert it to a configclass
-            if skill_name == "WalkSkill":
-                skill_cfg["reward_cfg"] = WalkSkillRewardCfg(**skill_cfg["reward_cfg"])
-                skill = WalkSkill(**skill_cfg)
-            elif skill_name == "ReachZSkill":
-                skill_cfg["reward_cfg"] = ReachZSkillRewardCfg(**skill_cfg["reward_cfg"])
-                skill = ReachZSkill(**skill_cfg)
-            else:
-                raise ValueError(f"Unknown skill name: {skill_name}")
+            skill = parse_cfg_skills(skill_name, skill_cfg)
             skill.set_non_params(self._num_envs, self._device)
             self._skills.append(skill)
             self._probs.append(prob)
