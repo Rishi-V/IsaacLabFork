@@ -7,10 +7,11 @@ from isaaclab.sensors import ContactSensor
 from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 from isaaclab.markers.config import RED_ARROW_X_MARKER_CFG, BLUE_ARROW_X_MARKER_CFG
 import isaaclab.utils.math as math_utils
-from .mod_anymal_c_env_cfg import CommandCfg, CustomCommandCfg, DynamicSkillCfg
+# from .mod_anymal_c_env_cfg import CustomCommandCfg, DynamicSkillCfg
 # from isaaclab.envs.mdp.commands.velocity_command import UniformVelocityCommand # Contains example of marker
 from abc import ABC, abstractmethod
 from isaaclab.utils import configclass
+import pdb
 
 class AbstractSkill(ABC):
     WALKING_HEIGHT = 0.6
@@ -59,7 +60,7 @@ class AbstractSkill(ABC):
             robot (Articulation): Robot
 
         Returns:
-            torch.Tensor: (N) boolean vector of envs that have failed the skill
+            torch.Tensor: (E) boolean vector of envs that have failed the skill
         """
         raise NotImplementedError("This method should be overridden by subclasses")
     
@@ -72,7 +73,7 @@ class AbstractSkill(ABC):
             robot (Articulation): Robot
 
         Returns:
-            torch.Tensor: (N) boolean vector of envs that have completed the skill
+            torch.Tensor: (E) boolean vector of envs that have completed the skill
         """
         raise NotImplementedError("This method should be overridden by subclasses")
     
@@ -149,9 +150,18 @@ class WalkSkillRewardCfg:
     undesired_contact_reward_scale = -1 #-1.0
     flat_orientation_reward_scale = -1
 
+@configclass
+class WalkSkillCfg:
+    reward_cfg = WalkSkillRewardCfg()
+    timeout = 400
+    dir = (0.0, 0.0, 0.0)
+    holdtime = 50
+    randomize = True
+    dts_memory = 100
+
 class WalkSkill(AbstractSkill):
-    def __init__(self, timeout: float, dir: tuple[float, float, float], holdtime: int, randomize: bool,
-                 dts_memory=100):
+    def __init__(self, reward_cfg: WalkSkillRewardCfg, timeout: float, dir: tuple[float, float, float], 
+                 holdtime: int, randomize: bool, dts_memory=100):
         """
         dir: (x,y,yaw) direction to walk in
         """
@@ -163,16 +173,13 @@ class WalkSkill(AbstractSkill):
         ## Internals that get updated
         self._current_timestep: torch.Tensor # = torch.zeros(size=(num_envs,), device=self._device)
         self._raw_commands: torch.Tensor # = torch.zeros(size=(num_envs, 4), device=self._device) #(x,y,yaw,z)
-        self._reward_cfg: WalkSkillRewardCfg
+        self._reward_cfg: WalkSkillRewardCfg = reward_cfg
         
     def set_non_params(self, num_envs, device):
         super().set_non_params(num_envs, device)
         self._current_timestep = torch.zeros(size=(num_envs,), device=self._device)
         self._raw_commands = torch.zeros(size=(num_envs, 4), device=self._device) #(x,y,yaw,z)
         self._raw_commands[:, 3] = AbstractSkill.WALKING_HEIGHT
-        
-    def set_reward_cfg(self, reward_cfg: WalkSkillRewardCfg):
-        self._reward_cfg = reward_cfg
     
     def set_new_internals(self, env_ids: torch.Tensor, robot: Articulation) -> None:
         if self._randomize:
@@ -183,12 +190,12 @@ class WalkSkill(AbstractSkill):
         # Note: Don't need to set the z-axis command as it is always the same from __init__
         self._current_timestep[env_ids] = 0
         
-    def get_raw_command(self, env_ids: torch.Tensor, robot: Articulation) -> torch.Tensor:
+    def get_raw_command(self, env_ids: torch.Tensor) -> torch.Tensor:
         return self._raw_commands[env_ids]
     
     def get_failures(self, env_ids: torch.Tensor, robot: Articulation) -> torch.Tensor:
         tipping_threshold = 0.8  # Define a tipping threshold, note that torch.norm(projected_gravity_b) is 1.0
-        died = torch.norm(robot.data.projected_gravity_b[:, :2], dim=1) > tipping_threshold
+        died = torch.norm(robot.data.projected_gravity_b[env_ids, :2], dim=1) > tipping_threshold
         return died | (self._current_timestep[env_ids] > self._timeout)
     
     def get_successes(self, env_ids: torch.Tensor, robot: Articulation) -> torch.Tensor:
@@ -286,8 +293,16 @@ class ReachZSkillRewardCfg:
     action_rate_reward_scale = -0.01
     undesired_contact_reward_scale = -1 #-1.0 # RVMod: Originally -1.0
     
+@configclass
+class ReachZSkillCfg:
+    reward_cfg = ReachZSkillRewardCfg()
+    timeout = 400
+    holdtime = 50
+    ztarget_type = "random"
+    dts_memory = 100
+    
 class ReachZSkill(AbstractSkill):
-    def __init__(self, timeout: float, 
+    def __init__(self, reward_cfg: ReachZSkillRewardCfg, timeout: float, 
                  holdtime: int, ztarget_type: str, dts_memory=100):
         super().__init__(timeout, dts_memory)
         self._holdtime = holdtime
@@ -299,16 +314,13 @@ class ReachZSkill(AbstractSkill):
         self._current_timestep: torch.Tensor # = torch.zeros(size=(num_envs,), device=self._device)
         self._sitting_height: torch.Tensor # = torch.zeros(size=(num_envs,), device=self._device)
         self._raw_commands: torch.Tensor # = torch.zeros(size=(num_envs, 4), device=self._device) #(x,y,yaw,z)
-        self._reward_cfg: ReachZSkillRewardCfg
+        self._reward_cfg: ReachZSkillRewardCfg = reward_cfg
         
     def set_non_params(self, num_envs, device):
         super().set_non_params(num_envs, device)
         self._current_timestep = torch.zeros(size=(num_envs,), device=self._device)
         self._sitting_height = torch.zeros(size=(num_envs,), device=self._device)
         self._raw_commands = torch.zeros(size=(num_envs, 4), device=self._device)
-        
-    def set_reward_cfg(self, reward_cfg: ReachZSkillRewardCfg):
-        self._reward_cfg = reward_cfg
 
     def set_new_internals(self, env_ids: torch.Tensor, robot: Articulation) -> None:
         """env_ids: (E)"""
@@ -323,12 +335,12 @@ class ReachZSkill(AbstractSkill):
         self._raw_commands[env_ids, 3] = self._sitting_height[env_ids]
         self._current_timestep[env_ids] = 0
         
-    def get_raw_command(self, env_ids: torch.Tensor, robot: Articulation) -> torch.Tensor:
+    def get_raw_command(self, env_ids: torch.Tensor) -> torch.Tensor:
         return self._raw_commands[env_ids]
     
     def get_failures(self, env_ids, robot) -> torch.Tensor:
         tipping_threshold = 0.8
-        died = torch.norm(robot.data.projected_gravity_b[:, :2], dim=1) > tipping_threshold
+        died = torch.norm(robot.data.projected_gravity_b[env_ids, :2], dim=1) > tipping_threshold
         return died | (self._current_timestep[env_ids] > self._timeout)
     
     def get_successes(self, env_ids: torch.Tensor, robot: Articulation) -> torch.Tensor:
@@ -443,7 +455,7 @@ class SequenceOfSkills(AbstractSkill):
         for i, skill in enumerate(self._skill_sequence):
             skill_env_ids = env_ids & (self._env_to_skill_index == i) # (N)
             if skill_env_ids.any():
-                failures[skill_env_ids] = skill.get_failures(skill_env_ids, robot) # (N) boolean
+                failures[skill_env_ids] = skill.get_failures(skill_env_ids, robot) # (E) boolean
         return failures[env_ids]
     
     def get_successes(self, env_ids: torch.Tensor, robot: Articulation) -> torch.Tensor:
@@ -451,7 +463,7 @@ class SequenceOfSkills(AbstractSkill):
         last_index = len(self._skill_sequence) - 1
         skill_env_ids = env_ids & (self._env_to_skill_index == last_index) # (N)
         if skill_env_ids.any():
-            successes[skill_env_ids] = self._skill_sequence[last_index].get_successes(skill_env_ids, robot) # (N)
+            successes[skill_env_ids] = self._skill_sequence[last_index].get_successes(skill_env_ids, robot) # (E)
         return successes[env_ids]
     
     def update(self, env_ids: torch.Tensor, robot: Articulation) -> None:
@@ -499,9 +511,11 @@ class SequenceOfSkills(AbstractSkill):
         return rewards[env_ids]
     
     
-# @configclass
-# class DynamicCommandCfg:
-#     commands: list[tuple[AbstractSkill, float]]
+@configclass
+class DynamicSkillCfg:
+    skills: list[tuple[str, configclass, float]] = [
+        ("WalkSkill", WalkSkillCfg(), 0.5),
+        ("ReachZSkill", ReachZSkillCfg(), 0.5)]
     
 class DynamicSkillManager:
     def __init__(self, num_envs: int, device: torch.device):
@@ -513,7 +527,16 @@ class DynamicSkillManager:
     def parse_cfg(self, skills_cfg: DynamicSkillCfg):
         self._skills.clear()
         self._probs.clear()
-        for skill, prob in skills_cfg.skills:
+        for skill_name, skill_cfg, prob in skills_cfg.skills:
+            # Note: For some reason skill_cfg is a dict, so we need to convert it to a configclass
+            if skill_name == "WalkSkill":
+                skill_cfg["reward_cfg"] = WalkSkillRewardCfg(**skill_cfg["reward_cfg"])
+                skill = WalkSkill(**skill_cfg)
+            elif skill_name == "ReachZSkill":
+                skill_cfg["reward_cfg"] = ReachZSkillRewardCfg(**skill_cfg["reward_cfg"])
+                skill = ReachZSkill(**skill_cfg)
+            else:
+                raise ValueError(f"Unknown skill name: {skill_name}")
             skill.set_non_params(self._num_envs, self._device)
             self._skills.append(skill)
             self._probs.append(prob)
@@ -527,8 +550,8 @@ class DynamicSkillManager:
         for i, skill in enumerate(self._skills):
             env_ids = self._skill_indices == i # (N)
             if env_ids.any():
-                failures = skill.get_failures(env_ids, robot) # (N)
-                successes = skill.get_successes(env_ids, robot) # (N)
+                failures = skill.get_failures(env_ids, robot) # (E)
+                successes = skill.get_successes(env_ids, robot) # (E)
                 should_be_reset[env_ids] = failures | successes
                 skill.update_success_rate(int(successes.sum().item()), int(failures.sum().item()))
         return should_be_reset
@@ -582,369 +605,369 @@ class DynamicSkillManager:
     
 
 
-class CustomCommandManager:
-    def __init__(self, num_envs: int, device: torch.device, cmd_cfg: CustomCommandCfg, z_is_vel: bool):
-        self._num_envs = num_envs
-        self._device = device
-        self.cmd_cfg = cmd_cfg
-        self.z_is_vel = z_is_vel
-        self.SITTING_HEIGHT = 0.10
-        self.WALKING_HEIGHT = 0.60
-        # self.PROB_SIT = cmd_cfg.prob_sit #0.5
-        self.MAX_Z_VEL = 0.1
+# class CustomCommandManager:
+#     def __init__(self, num_envs: int, device: torch.device, cmd_cfg: CustomCommandCfg, z_is_vel: bool):
+#         self._num_envs = num_envs
+#         self._device = device
+#         self.cmd_cfg = cmd_cfg
+#         self.z_is_vel = z_is_vel
+#         self.SITTING_HEIGHT = 0.10
+#         self.WALKING_HEIGHT = 0.60
+#         # self.PROB_SIT = cmd_cfg.prob_sit #0.5
+#         self.MAX_Z_VEL = 0.1
         
-        self._high_level_commands = torch.zeros(size=(self._num_envs,), device=self._device) # (N); -1=sit, 1=unsit, 0=walk
-        self._raw_commands = torch.zeros(size=(self._num_envs, 4), device=self._device) # (N,4); (x,y,yaw,z) velocities or positions
-        self._time_doing_action = torch.zeros(size=(self._num_envs,), device=self._device) # (N); Time spent doing action
-        self._time_trying_command = torch.zeros(size=(self._num_envs,), device=self._device) # (N); Time spent trying to do action
+#         self._high_level_commands = torch.zeros(size=(self._num_envs,), device=self._device) # (N); -1=sit, 1=unsit, 0=walk
+#         self._raw_commands = torch.zeros(size=(self._num_envs, 4), device=self._device) # (N,4); (x,y,yaw,z) velocities or positions
+#         self._time_doing_action = torch.zeros(size=(self._num_envs,), device=self._device) # (N); Time spent doing action
+#         self._time_trying_command = torch.zeros(size=(self._num_envs,), device=self._device) # (N); Time spent trying to do action
         
-        self.parse_cfg_to_custom_command_sequence(cmd_cfg)
+#         self.parse_cfg_to_custom_command_sequence(cmd_cfg)
         
-    def parse_cfg_to_custom_command_sequence(self, cmd_cfg: CustomCommandCfg):
-        """high_level_command_sequence: (N,T,8)
-        - 8: (high_level_index, timeout, sample_or_done, x_vel, y_vel, yaw_vel, z_height)
-        - high_level_index: -1=sit, 1=unsit, 0=walk
-        - timeout: Maximum of timesteps to try to do action
-        - timehold: Number of timesteps to hold action
-        - sample_or_done: 0=sample raw commands, 1=don't sample, 2=done
-        - x_vel, y_vel, yaw_vel, z_height: Only use if don't sample (sample_or_done=1)
-        """
-        ## Custom command sequence
-        num_max_commands = cmd_cfg.max_cmd_length + 1 # +1 for done command
-        self._hl_sequence = torch.zeros(size=(self._num_envs, num_max_commands, 8), device=self._device) # (N,T,8)
-        self._hl_indices = torch.zeros(size=(self._num_envs,), device=self._device, dtype=torch.long) # (N)
+#     def parse_cfg_to_custom_command_sequence(self, cmd_cfg: CustomCommandCfg):
+#         """high_level_command_sequence: (N,T,8)
+#         - 8: (high_level_index, timeout, sample_or_done, x_vel, y_vel, yaw_vel, z_height)
+#         - high_level_index: -1=sit, 1=unsit, 0=walk
+#         - timeout: Maximum of timesteps to try to do action
+#         - timehold: Number of timesteps to hold action
+#         - sample_or_done: 0=sample raw commands, 1=don't sample, 2=done
+#         - x_vel, y_vel, yaw_vel, z_height: Only use if don't sample (sample_or_done=1)
+#         """
+#         ## Custom command sequence
+#         num_max_commands = cmd_cfg.max_cmd_length + 1 # +1 for done command
+#         self._hl_sequence = torch.zeros(size=(self._num_envs, num_max_commands, 8), device=self._device) # (N,T,8)
+#         self._hl_indices = torch.zeros(size=(self._num_envs,), device=self._device, dtype=torch.long) # (N)
         
-        self.CC_IND_HL = 0
-        self.CC_IND_TIMEOUT = 1
-        self.CC_IND_TIMEHOLD = 2
-        self.CC_IND_SAMPLE_OR_DONE = 3
-        self.CC_IND_RAW_ACTIONS = 4
+#         self.CC_IND_HL = 0
+#         self.CC_IND_TIMEOUT = 1
+#         self.CC_IND_TIMEHOLD = 2
+#         self.CC_IND_SAMPLE_OR_DONE = 3
+#         self.CC_IND_RAW_ACTIONS = 4
         
-        max_cmd_length = cmd_cfg.max_cmd_length # This is Tmax-1, we add the done command later
-        cmd_list = cmd_cfg.cmd_list
+#         max_cmd_length = cmd_cfg.max_cmd_length # This is Tmax-1, we add the done command later
+#         cmd_list = cmd_cfg.cmd_list
         
-        cmd_idx_to_tensor = torch.zeros(size=(len(cmd_list), max_cmd_length+1, 8), device=self._device) # (NumCommands,Tmax,8)
-        self._sample_probs = torch.zeros(size=(len(cmd_list),), device=self._device) # (NumCommands)
-        for i, cmd_seq_with_prob in enumerate(cmd_list):
-            cmd_seq, prob = cmd_seq_with_prob
-            self._sample_probs[i] = prob
-            cmd_seq = [self.map_str_to_tensor(cmd) for cmd in cmd_seq] # (Tcur-1,8)
-            cmd_seq.append(self.map_str_to_tensor("done")) # (Tcur<Tmax,8)
-            cmd_seq = torch.stack(cmd_seq) # Tensor (Tcur,8)
-            cmd_idx_to_tensor[i, :len(cmd_seq), :] = cmd_seq # (Tcur,8)
-        self._cmd_idx_to_tensor = cmd_idx_to_tensor # (NumCommands,Tmax,8)
+#         cmd_idx_to_tensor = torch.zeros(size=(len(cmd_list), max_cmd_length+1, 8), device=self._device) # (NumCommands,Tmax,8)
+#         self._sample_probs = torch.zeros(size=(len(cmd_list),), device=self._device) # (NumCommands)
+#         for i, cmd_seq_with_prob in enumerate(cmd_list):
+#             cmd_seq, prob = cmd_seq_with_prob
+#             self._sample_probs[i] = prob
+#             cmd_seq = [self.map_str_to_tensor(cmd) for cmd in cmd_seq] # (Tcur-1,8)
+#             cmd_seq.append(self.map_str_to_tensor("done")) # (Tcur<Tmax,8)
+#             cmd_seq = torch.stack(cmd_seq) # Tensor (Tcur,8)
+#             cmd_idx_to_tensor[i, :len(cmd_seq), :] = cmd_seq # (Tcur,8)
+#         self._cmd_idx_to_tensor = cmd_idx_to_tensor # (NumCommands,Tmax,8)
     
-    def map_str_to_tensor(self, cmd_str: str):
-        """cmd_str: [sit, unsit, walk, r_sit, r_unsit, r_walk, done]
-        Returns: (high_level_index, timeout, timehold, sample_or_done, x_vel, y_vel, yaw_vel, z_height)
-        """
-        if cmd_str == "sit":
-            return torch.tensor([-1, 400, 50, 1, 0, 0, 0, self.SITTING_HEIGHT], device=self._device)
-        elif cmd_str == "r_sit":
-            return torch.tensor([-1, 400, 50, 0, 0, 0, 0, self.SITTING_HEIGHT], device=self._device)
-        elif cmd_str == "unsit":
-            return torch.tensor([1, 400, 50, 1, 0, 0, 0, self.WALKING_HEIGHT], device=self._device)
-        elif cmd_str == "r_unsit":
-            return torch.tensor([1, 400, 50, 0, 0, 0, 0, self.WALKING_HEIGHT], device=self._device)
-        elif cmd_str == "walk":
-            return torch.tensor([0, 400, 400, 1, 1, 0, 0, self.WALKING_HEIGHT], device=self._device)
-        elif cmd_str == "r_walk":
-            return torch.tensor([0, 400, 400, 0, 0, 0, 0, 0], device=self._device)
-        elif cmd_str == "done":
-            return torch.tensor([0, 0, 0, 2, 0, 0, 0, 0], device=self._device)
-        else:
-            raise ValueError(f"Unknown command: {cmd_str}")
+#     def map_str_to_tensor(self, cmd_str: str):
+#         """cmd_str: [sit, unsit, walk, r_sit, r_unsit, r_walk, done]
+#         Returns: (high_level_index, timeout, timehold, sample_or_done, x_vel, y_vel, yaw_vel, z_height)
+#         """
+#         if cmd_str == "sit":
+#             return torch.tensor([-1, 400, 50, 1, 0, 0, 0, self.SITTING_HEIGHT], device=self._device)
+#         elif cmd_str == "r_sit":
+#             return torch.tensor([-1, 400, 50, 0, 0, 0, 0, self.SITTING_HEIGHT], device=self._device)
+#         elif cmd_str == "unsit":
+#             return torch.tensor([1, 400, 50, 1, 0, 0, 0, self.WALKING_HEIGHT], device=self._device)
+#         elif cmd_str == "r_unsit":
+#             return torch.tensor([1, 400, 50, 0, 0, 0, 0, self.WALKING_HEIGHT], device=self._device)
+#         elif cmd_str == "walk":
+#             return torch.tensor([0, 400, 400, 1, 1, 0, 0, self.WALKING_HEIGHT], device=self._device)
+#         elif cmd_str == "r_walk":
+#             return torch.tensor([0, 400, 400, 0, 0, 0, 0, 0], device=self._device)
+#         elif cmd_str == "done":
+#             return torch.tensor([0, 0, 0, 2, 0, 0, 0, 0], device=self._device)
+#         else:
+#             raise ValueError(f"Unknown command: {cmd_str}")
         
-    def resample_hl_sequence(self, env_ids: torch.Tensor, robot: Articulation):
-        """env_ids: (E)
-        Note: env_ids should be a tensor of indices, not boolean mask"""
-        self._hl_indices[env_ids] = 0
-        self._time_doing_action[env_ids] = 0
+#     def resample_hl_sequence(self, env_ids: torch.Tensor, robot: Articulation):
+#         """env_ids: (E)
+#         Note: env_ids should be a tensor of indices, not boolean mask"""
+#         self._hl_indices[env_ids] = 0
+#         self._time_doing_action[env_ids] = 0
         
-        ### Sample cmd indices
-        cmd_inds = torch.multinomial(self._sample_probs, len(env_ids), replacement=True) # (E)
-        self._hl_sequence[env_ids] = self._cmd_idx_to_tensor[cmd_inds] # (E,T,8)
+#         ### Sample cmd indices
+#         cmd_inds = torch.multinomial(self._sample_probs, len(env_ids), replacement=True) # (E)
+#         self._hl_sequence[env_ids] = self._cmd_idx_to_tensor[cmd_inds] # (E,T,8)
         
-        # ### Resample hl_sequence based on cmd_cfg
-        # rand_sequence = (-1, 1, 0) # ["sit", "unsit", "walk"]
-        # self._hl_sequence[env_ids] = torch.zeros(size=(len(env_ids), 10, 8), device=self._device) # (E,T,8)
-        # self._hl_sequence[env_ids, :3, self.CC_IND_HL] = torch.tensor(rand_sequence, device=self._device).repeat(len(env_ids), 1)
-        # self._hl_sequence[env_ids, :3, self.CC_IND_SAMPLE_OR_DONE] = 0 # 0=sample raw commands
-        # self._time_trying_command[env_ids] = self._hl_sequence[env_ids, 0, self.CC_IND_TIMEOUT]
+#         # ### Resample hl_sequence based on cmd_cfg
+#         # rand_sequence = (-1, 1, 0) # ["sit", "unsit", "walk"]
+#         # self._hl_sequence[env_ids] = torch.zeros(size=(len(env_ids), 10, 8), device=self._device) # (E,T,8)
+#         # self._hl_sequence[env_ids, :3, self.CC_IND_HL] = torch.tensor(rand_sequence, device=self._device).repeat(len(env_ids), 1)
+#         # self._hl_sequence[env_ids, :3, self.CC_IND_SAMPLE_OR_DONE] = 0 # 0=sample raw commands
+#         # self._time_trying_command[env_ids] = self._hl_sequence[env_ids, 0, self.CC_IND_TIMEOUT]
         
-    def set_custom_command_sequence(self, high_level_command_sequence: torch.Tensor):
-        self._hl_sequence = high_level_command_sequence # (N,T,8)
-        self._hl_indices = torch.zeros(size=(self._num_envs,), device=self._device) # (N)
+#     def set_custom_command_sequence(self, high_level_command_sequence: torch.Tensor):
+#         self._hl_sequence = high_level_command_sequence # (N,T,8)
+#         self._hl_indices = torch.zeros(size=(self._num_envs,), device=self._device) # (N)
         
-    def update_time_doing_action2(self, robot: Articulation):
-        self._time_trying_command -= 1
-        ### Sitting commands
-        sitting_envs = self._high_level_commands == -1 # (N)
-        sitting_robots = torch.abs(robot.data.root_com_pos_w[:,2] - self.SITTING_HEIGHT) < 0.1 # (N)
-        successful_sits = torch.logical_and(sitting_envs, sitting_robots) # (N)
-        self._time_doing_action[successful_sits] += 1
+#     def update_time_doing_action2(self, robot: Articulation):
+#         self._time_trying_command -= 1
+#         ### Sitting commands
+#         sitting_envs = self._high_level_commands == -1 # (N)
+#         sitting_robots = torch.abs(robot.data.root_com_pos_w[:,2] - self.SITTING_HEIGHT) < 0.1 # (N)
+#         successful_sits = torch.logical_and(sitting_envs, sitting_robots) # (N)
+#         self._time_doing_action[successful_sits] += 1
         
-        ### Unsitting commands
-        unsitting_envs = self._high_level_commands == 1 # (N)
-        unsitting_robots = torch.abs(robot.data.root_com_pos_w[:,2] - self.WALKING_HEIGHT) < 0.1 # (N)
-        successful_unsits = torch.logical_and(unsitting_envs, unsitting_robots) # (N)
-        self._time_doing_action[successful_unsits] += 1
+#         ### Unsitting commands
+#         unsitting_envs = self._high_level_commands == 1 # (N)
+#         unsitting_robots = torch.abs(robot.data.root_com_pos_w[:,2] - self.WALKING_HEIGHT) < 0.1 # (N)
+#         successful_unsits = torch.logical_and(unsitting_envs, unsitting_robots) # (N)
+#         self._time_doing_action[successful_unsits] += 1
         
-        ### Walking commands
-        walking_envs = self._high_level_commands == 0 # (N)
-        lin_vel_error = torch.sum(torch.square(self._raw_commands[:, :2] - robot.data.root_lin_vel_b[:, :2]), dim=1) < 0.1 # (N)
-        yaw_rate_error = torch.square(self._raw_commands[:, 2] - robot.data.root_ang_vel_b[:, 2]) < 0.1 # (N)
-        successful_walks = torch.logical_and(walking_envs, torch.logical_and(lin_vel_error, yaw_rate_error)) # (N)
-        self._time_doing_action[successful_walks] += 1
+#         ### Walking commands
+#         walking_envs = self._high_level_commands == 0 # (N)
+#         lin_vel_error = torch.sum(torch.square(self._raw_commands[:, :2] - robot.data.root_lin_vel_b[:, :2]), dim=1) < 0.1 # (N)
+#         yaw_rate_error = torch.square(self._raw_commands[:, 2] - robot.data.root_ang_vel_b[:, 2]) < 0.1 # (N)
+#         successful_walks = torch.logical_and(walking_envs, torch.logical_and(lin_vel_error, yaw_rate_error)) # (N)
+#         self._time_doing_action[successful_walks] += 1
         
-    def get_finished_envs2(self) -> torch.Tensor:
-        """Returns a boolean mask of environments that have finished their current high-level command"""
-        finished_envs = self._time_trying_command < 0 # (N)
-        finished_envs |= self._time_doing_action > self._hl_sequence[:, self._hl_indices, self.CC_IND_TIMEHOLD] # (N)
-        return finished_envs        
+#     def get_finished_envs2(self) -> torch.Tensor:
+#         """Returns a boolean mask of environments that have finished their current high-level command"""
+#         finished_envs = self._time_trying_command < 0 # (N)
+#         finished_envs |= self._time_doing_action > self._hl_sequence[:, self._hl_indices, self.CC_IND_TIMEHOLD] # (N)
+#         return finished_envs        
 
-    def update_hl_commands2(self, env_inds: torch.Tensor, robot: Articulation, finished_not_reset: bool):
-        """finished_env_inds: (N) or (E) depending on boolmask"""
-        if finished_not_reset:
-            env_inds = torch.where(env_inds)[0] # (E)
+#     def update_hl_commands2(self, env_inds: torch.Tensor, robot: Articulation, finished_not_reset: bool):
+#         """finished_env_inds: (N) or (E) depending on boolmask"""
+#         if finished_not_reset:
+#             env_inds = torch.where(env_inds)[0] # (E)
             
-            self._hl_indices[env_inds] += 1
-            next_hl_inds = self._hl_indices[env_inds] # (E)
+#             self._hl_indices[env_inds] += 1
+#             next_hl_inds = self._hl_indices[env_inds] # (E)
     
-            ### Restart sequence for done envsl must be done before setting raw commands
-            sample_or_done = self._hl_sequence[env_inds, next_hl_inds, self.CC_IND_SAMPLE_OR_DONE] # (E)
-            done_envs = env_inds[sample_or_done == 2] # (E_done)
-            if len(done_envs) > 0:
-                self.resample_hl_sequence(done_envs, robot=robot)
-        else:
-            self.resample_hl_sequence(env_inds, robot=robot)
+#             ### Restart sequence for done envsl must be done before setting raw commands
+#             sample_or_done = self._hl_sequence[env_inds, next_hl_inds, self.CC_IND_SAMPLE_OR_DONE] # (E)
+#             done_envs = env_inds[sample_or_done == 2] # (E_done)
+#             if len(done_envs) > 0:
+#                 self.resample_hl_sequence(done_envs, robot=robot)
+#         else:
+#             self.resample_hl_sequence(env_inds, robot=robot)
             
-        next_hl_inds = self._hl_indices[env_inds] # (E) # Update next_hl_inds as some would be set to 0
-        self._time_doing_action[env_inds] = 0 # (E)
-        self._time_trying_command[env_inds] = self._hl_sequence[env_inds, next_hl_inds, self.CC_IND_TIMEOUT] # (E)
+#         next_hl_inds = self._hl_indices[env_inds] # (E) # Update next_hl_inds as some would be set to 0
+#         self._time_doing_action[env_inds] = 0 # (E)
+#         self._time_trying_command[env_inds] = self._hl_sequence[env_inds, next_hl_inds, self.CC_IND_TIMEOUT] # (E)
         
-        ### Set next high-level commands and raw commands; done after reset so will incorporate reset commands
-        next_hl_command = self._hl_sequence[env_inds, next_hl_inds, self.CC_IND_HL] # (E)
-        self._high_level_commands[env_inds] = next_hl_command # (E)
-        self._raw_commands[env_inds] = self._hl_sequence[env_inds, next_hl_inds, self.CC_IND_RAW_ACTIONS:] # (E,4)
+#         ### Set next high-level commands and raw commands; done after reset so will incorporate reset commands
+#         next_hl_command = self._hl_sequence[env_inds, next_hl_inds, self.CC_IND_HL] # (E)
+#         self._high_level_commands[env_inds] = next_hl_command # (E)
+#         self._raw_commands[env_inds] = self._hl_sequence[env_inds, next_hl_inds, self.CC_IND_RAW_ACTIONS:] # (E,4)
         
-        ### Set randomly sampled raw commands. This will overwrite some of the raw commands above
-        sample_or_done = self._hl_sequence[env_inds, next_hl_inds, self.CC_IND_SAMPLE_OR_DONE] # (E)
-        sample_envs = sample_or_done == 0 # (E)
-        random_sit_envs = sample_envs & (next_hl_command == -1) # (E)
-        random_unsit_envs = sample_envs & (next_hl_command == 1) # (E)
-        random_walk_envs = sample_envs & (next_hl_command == 0) # (E)
-        self.set_random_sit_commands(env_inds[random_sit_envs], boolmask=False)
-        self.set_random_unsit_commands(env_inds[random_unsit_envs], boolmask=False)
-        self.set_random_walk_commands(env_inds[random_walk_envs], boolmask=False)
+#         ### Set randomly sampled raw commands. This will overwrite some of the raw commands above
+#         sample_or_done = self._hl_sequence[env_inds, next_hl_inds, self.CC_IND_SAMPLE_OR_DONE] # (E)
+#         sample_envs = sample_or_done == 0 # (E)
+#         random_sit_envs = sample_envs & (next_hl_command == -1) # (E)
+#         random_unsit_envs = sample_envs & (next_hl_command == 1) # (E)
+#         random_walk_envs = sample_envs & (next_hl_command == 0) # (E)
+#         self.set_random_sit_commands(env_inds[random_sit_envs], boolmask=False)
+#         self.set_random_unsit_commands(env_inds[random_unsit_envs], boolmask=False)
+#         self.set_random_walk_commands(env_inds[random_walk_envs], boolmask=False)
         
     
-    def update_raw_commands_based_on_robot2(self, robot: Articulation):
-        """Update raw commands based on the robot's current state.        
-        """
-        # Sitting raw commands
-        if self.z_is_vel:
-            sitting_envs = self._high_level_commands == -1 # (N)
-            self._raw_commands[sitting_envs,:3] = 0.0
-            error = self.SITTING_HEIGHT - robot.data.root_com_pos_w[sitting_envs,2] # negative if robot is above sitting height
-            self._raw_commands[sitting_envs,3] = torch.clamp(error, -self.MAX_Z_VEL, self.MAX_Z_VEL)
+#     def update_raw_commands_based_on_robot2(self, robot: Articulation):
+#         """Update raw commands based on the robot's current state.        
+#         """
+#         # Sitting raw commands
+#         if self.z_is_vel:
+#             sitting_envs = self._high_level_commands == -1 # (N)
+#             self._raw_commands[sitting_envs,:3] = 0.0
+#             error = self.SITTING_HEIGHT - robot.data.root_com_pos_w[sitting_envs,2] # negative if robot is above sitting height
+#             self._raw_commands[sitting_envs,3] = torch.clamp(error, -self.MAX_Z_VEL, self.MAX_Z_VEL)
             
-        # Unsitting raw commands
-        if self.z_is_vel:
-            unsitting_envs = self._high_level_commands == 1 # (N)
-            self._raw_commands[unsitting_envs,:3] = 0.0
-            error = self.WALKING_HEIGHT - robot.data.root_com_pos_w[unsitting_envs,2] # positive if robot is below walking height
-            self._raw_commands[unsitting_envs,3] = torch.clamp(error, -self.MAX_Z_VEL, self.MAX_Z_VEL)
+#         # Unsitting raw commands
+#         if self.z_is_vel:
+#             unsitting_envs = self._high_level_commands == 1 # (N)
+#             self._raw_commands[unsitting_envs,:3] = 0.0
+#             error = self.WALKING_HEIGHT - robot.data.root_com_pos_w[unsitting_envs,2] # positive if robot is below walking height
+#             self._raw_commands[unsitting_envs,3] = torch.clamp(error, -self.MAX_Z_VEL, self.MAX_Z_VEL)
         
-    def update_commands2(self, robot: Articulation):
-        self.update_time_doing_action2(robot) # Updates time_doing_action based on the robot and high_level_commands
-        finished_envs = self.get_finished_envs2() # Gets envs that finished holding or timed out
-        self.update_hl_commands2(finished_envs, robot, finished_not_reset=True) # Updates high_level_commands, raw_commands, and time_trying_command based on finished_envs
-        self.update_raw_commands_based_on_robot2(robot) # Updates raw_commands based on the robot and high_level_commands
+#     def update_commands2(self, robot: Articulation):
+#         self.update_time_doing_action2(robot) # Updates time_doing_action based on the robot and high_level_commands
+#         finished_envs = self.get_finished_envs2() # Gets envs that finished holding or timed out
+#         self.update_hl_commands2(finished_envs, robot, finished_not_reset=True) # Updates high_level_commands, raw_commands, and time_trying_command based on finished_envs
+#         self.update_raw_commands_based_on_robot2(robot) # Updates raw_commands based on the robot and high_level_commands
         
-    def reset_commands2(self, env_ids: torch.Tensor, robot: Articulation):
-        """env_ids: (E)
-        Note: env_ids should be a tensor of indices, not boolean mask"""
-        self.update_hl_commands2(env_ids, robot, finished_not_reset=False) # Updates high_level_commands, raw_commands, and time_trying_command based on finished_envs
-        self.update_raw_commands_based_on_robot2(robot) # Updates raw_commands based on the robot and high_level_commands
+#     def reset_commands2(self, env_ids: torch.Tensor, robot: Articulation):
+#         """env_ids: (E)
+#         Note: env_ids should be a tensor of indices, not boolean mask"""
+#         self.update_hl_commands2(env_ids, robot, finished_not_reset=False) # Updates high_level_commands, raw_commands, and time_trying_command based on finished_envs
+#         self.update_raw_commands_based_on_robot2(robot) # Updates raw_commands based on the robot and high_level_commands
         
-    def update_commands(self, robot: Articulation):
-        self._time_trying_command -= 1
-        finished_trying_envs = self._time_trying_command < 0
+#     def update_commands(self, robot: Articulation):
+#         self._time_trying_command -= 1
+#         finished_trying_envs = self._time_trying_command < 0
         
-        ### Sitting commands
-        sitting_envs = self._high_level_commands == -1 # (N)
-        sitting_robots = torch.abs(robot.data.root_com_pos_w[:,2] - self.SITTING_HEIGHT) < 0.1 # (N)
-        successful_sits = torch.logical_and(sitting_envs, sitting_robots) # (N)
-        self._time_doing_action[successful_sits] += 1
+#         ### Sitting commands
+#         sitting_envs = self._high_level_commands == -1 # (N)
+#         sitting_robots = torch.abs(robot.data.root_com_pos_w[:,2] - self.SITTING_HEIGHT) < 0.1 # (N)
+#         successful_sits = torch.logical_and(sitting_envs, sitting_robots) # (N)
+#         self._time_doing_action[successful_sits] += 1
         
-        ### Unsitting commands
-        unsitting_envs = self._high_level_commands == 1 # (N)
-        unsitting_robots = torch.abs(robot.data.root_com_pos_w[:,2] - self.WALKING_HEIGHT) < 0.1 # (N)
-        successful_unsits = torch.logical_and(unsitting_envs, unsitting_robots) # (N)
-        self._time_doing_action[successful_unsits] += 1
+#         ### Unsitting commands
+#         unsitting_envs = self._high_level_commands == 1 # (N)
+#         unsitting_robots = torch.abs(robot.data.root_com_pos_w[:,2] - self.WALKING_HEIGHT) < 0.1 # (N)
+#         successful_unsits = torch.logical_and(unsitting_envs, unsitting_robots) # (N)
+#         self._time_doing_action[successful_unsits] += 1
         
-        ### Walking commands
-        walking_envs = self._high_level_commands == 0 # (N)
-        lin_vel_error = torch.sum(torch.square(self._raw_commands[:, :2] - robot.data.root_lin_vel_b[:, :2]), dim=1) < 0.1 # (N)
-        yaw_rate_error = torch.square(self._raw_commands[:, 2] - robot.data.root_ang_vel_b[:, 2]) < 0.1 # (N)
-        successful_walks = torch.logical_and(walking_envs, torch.logical_and(lin_vel_error, yaw_rate_error)) # (N)
-        self._time_doing_action[successful_walks] += 1
+#         ### Walking commands
+#         walking_envs = self._high_level_commands == 0 # (N)
+#         lin_vel_error = torch.sum(torch.square(self._raw_commands[:, :2] - robot.data.root_lin_vel_b[:, :2]), dim=1) < 0.1 # (N)
+#         yaw_rate_error = torch.square(self._raw_commands[:, 2] - robot.data.root_ang_vel_b[:, 2]) < 0.1 # (N)
+#         successful_walks = torch.logical_and(walking_envs, torch.logical_and(lin_vel_error, yaw_rate_error)) # (N)
+#         self._time_doing_action[successful_walks] += 1
         
-        ### Update high_level actions
-        finished_sitting_envs = sitting_envs & ((self._time_doing_action > 50) | finished_trying_envs) # (N), 1 second
-        finished_unsitting_envs = unsitting_envs & ((self._time_doing_action > 50) | finished_trying_envs)  # (N), 1 second
-        finished_walking_envs = walking_envs & ((self._time_doing_action > 400) | finished_trying_envs) # (N), 10 seconds
-        new_sitting_envs = finished_walking_envs # finished_walking_envs # Make them unsit
-        new_unsitting_envs = finished_sitting_envs # finished_sitting_envs # Make them sit walk
-        new_walking_envs = finished_unsitting_envs # self._high_level_commands == 2 # finished_unsitting_envs # Make them sit, change command later
-        self._high_level_commands[new_unsitting_envs] = 1 
-        self._high_level_commands[new_walking_envs] = 0 
-        self._high_level_commands[new_sitting_envs] = -1 
-        self._time_doing_action[new_unsitting_envs] = 0
-        self._time_doing_action[new_walking_envs] = 0
-        self._time_doing_action[new_sitting_envs] = 0
-        self.set_time_trying_command(new_unsitting_envs, boolmask=True)
-        self.set_time_trying_command(new_walking_envs, boolmask=True)
-        self.set_time_trying_command(new_sitting_envs, boolmask=True)
+#         ### Update high_level actions
+#         finished_sitting_envs = sitting_envs & ((self._time_doing_action > 50) | finished_trying_envs) # (N), 1 second
+#         finished_unsitting_envs = unsitting_envs & ((self._time_doing_action > 50) | finished_trying_envs)  # (N), 1 second
+#         finished_walking_envs = walking_envs & ((self._time_doing_action > 400) | finished_trying_envs) # (N), 10 seconds
+#         new_sitting_envs = finished_walking_envs # finished_walking_envs # Make them unsit
+#         new_unsitting_envs = finished_sitting_envs # finished_sitting_envs # Make them sit walk
+#         new_walking_envs = finished_unsitting_envs # self._high_level_commands == 2 # finished_unsitting_envs # Make them sit, change command later
+#         self._high_level_commands[new_unsitting_envs] = 1 
+#         self._high_level_commands[new_walking_envs] = 0 
+#         self._high_level_commands[new_sitting_envs] = -1 
+#         self._time_doing_action[new_unsitting_envs] = 0
+#         self._time_doing_action[new_walking_envs] = 0
+#         self._time_doing_action[new_sitting_envs] = 0
+#         self.set_time_trying_command(new_unsitting_envs, boolmask=True)
+#         self.set_time_trying_command(new_walking_envs, boolmask=True)
+#         self.set_time_trying_command(new_sitting_envs, boolmask=True)
         
-        ### Update raw commands
-        # Sitting raw commands
-        if self.z_is_vel:
-            sitting_envs = self._high_level_commands == -1 # (N)
-            self._raw_commands[sitting_envs,:3] = 0.0
-            error = self.SITTING_HEIGHT - robot.data.root_com_pos_w[sitting_envs,2] # negative if robot is above sitting height
-            self._raw_commands[sitting_envs,3] = torch.clamp(error, -self.MAX_Z_VEL, self.MAX_Z_VEL)
-        else: # Only update new sitting commands
-            self.set_random_sit_commands(new_sitting_envs, boolmask=True)
-            # self._raw_commands[sitting_envs,3] = self.SITTING_HEIGHT # (x_vel,y_vel,yaw_vel,z_height)
-        # Unsitting raw commands
-        if self.z_is_vel:
-            unsitting_envs = self._high_level_commands == 1 # (N)
-            self._raw_commands[unsitting_envs,:3] = 0.0
-            error = self.WALKING_HEIGHT - robot.data.root_com_pos_w[unsitting_envs,2] # positive if robot is below walking height
-            self._raw_commands[unsitting_envs,3] = torch.clamp(error, -self.MAX_Z_VEL, self.MAX_Z_VEL)
-        else:
-            # self._raw_commands[unsitting_envs,3] = self.WALKING_HEIGHT
-            self.set_random_unsit_commands(new_unsitting_envs, boolmask=True)
-        # Walking raw commands
-        # new_walking_envs = torch.logical_and(walking_envs, self._time_doing_action > 100) # (N)
-        self.set_random_walk_commands(new_walking_envs, boolmask=True)
+#         ### Update raw commands
+#         # Sitting raw commands
+#         if self.z_is_vel:
+#             sitting_envs = self._high_level_commands == -1 # (N)
+#             self._raw_commands[sitting_envs,:3] = 0.0
+#             error = self.SITTING_HEIGHT - robot.data.root_com_pos_w[sitting_envs,2] # negative if robot is above sitting height
+#             self._raw_commands[sitting_envs,3] = torch.clamp(error, -self.MAX_Z_VEL, self.MAX_Z_VEL)
+#         else: # Only update new sitting commands
+#             self.set_random_sit_commands(new_sitting_envs, boolmask=True)
+#             # self._raw_commands[sitting_envs,3] = self.SITTING_HEIGHT # (x_vel,y_vel,yaw_vel,z_height)
+#         # Unsitting raw commands
+#         if self.z_is_vel:
+#             unsitting_envs = self._high_level_commands == 1 # (N)
+#             self._raw_commands[unsitting_envs,:3] = 0.0
+#             error = self.WALKING_HEIGHT - robot.data.root_com_pos_w[unsitting_envs,2] # positive if robot is below walking height
+#             self._raw_commands[unsitting_envs,3] = torch.clamp(error, -self.MAX_Z_VEL, self.MAX_Z_VEL)
+#         else:
+#             # self._raw_commands[unsitting_envs,3] = self.WALKING_HEIGHT
+#             self.set_random_unsit_commands(new_unsitting_envs, boolmask=True)
+#         # Walking raw commands
+#         # new_walking_envs = torch.logical_and(walking_envs, self._time_doing_action > 100) # (N)
+#         self.set_random_walk_commands(new_walking_envs, boolmask=True)
         
-    def reset_commands(self, env_ids: torch.Tensor, robot: Articulation):
-        """env_ids: (E)
-        Note: env_ids should be a tensor of indices, not boolean mask"""
-        ## Split new envs into walking and sitting
-        prob_sit = torch.rand(size=(len(env_ids),), device=self._device) # (E)
-        bool_list = torch.where(prob_sit < self.PROB_SIT, 0, 1) # (E)
-        sitting_inds = env_ids[torch.where(bool_list == 0)[0]] # (E)
-        walking_inds = env_ids[torch.where(bool_list == 1)[0]] # (E)
+#     def reset_commands(self, env_ids: torch.Tensor, robot: Articulation):
+#         """env_ids: (E)
+#         Note: env_ids should be a tensor of indices, not boolean mask"""
+#         ## Split new envs into walking and sitting
+#         prob_sit = torch.rand(size=(len(env_ids),), device=self._device) # (E)
+#         bool_list = torch.where(prob_sit < self.PROB_SIT, 0, 1) # (E)
+#         sitting_inds = env_ids[torch.where(bool_list == 0)[0]] # (E)
+#         walking_inds = env_ids[torch.where(bool_list == 1)[0]] # (E)
         
-        ## Set random walking commands
-        self._high_level_commands[walking_inds] = 0
-        self.set_random_walk_commands(walking_inds, boolmask=False)
+#         ## Set random walking commands
+#         self._high_level_commands[walking_inds] = 0
+#         self.set_random_walk_commands(walking_inds, boolmask=False)
         
-        ## Set sitting commands
-        self._high_level_commands[sitting_inds] = -1
-        self.set_random_sit_commands(sitting_inds, boolmask=False)
+#         ## Set sitting commands
+#         self._high_level_commands[sitting_inds] = -1
+#         self.set_random_sit_commands(sitting_inds, boolmask=False)
         
-        ## Reset time doing action
-        self._time_doing_action[env_ids] = 0
-        self.set_time_trying_command(env_ids, boolmask=False)
+#         ## Reset time doing action
+#         self._time_doing_action[env_ids] = 0
+#         self.set_time_trying_command(env_ids, boolmask=False)
         
-    def set_time_trying_command(self, env_ids: torch.Tensor, boolmask: bool):
-        """env_ids: (E)
-        boolmask: bool indicating whether env_ids is a boolean mask or not"""
-        if boolmask:
-            self._time_trying_command[env_ids] = torch.zeros(size=(int(env_ids.sum().item()),), device=self._device).uniform_(400, 800)
-        else:
-            self._time_trying_command[env_ids] = torch.zeros(size=(len(env_ids),), device=self._device).uniform_(400, 800)
+#     def set_time_trying_command(self, env_ids: torch.Tensor, boolmask: bool):
+#         """env_ids: (E)
+#         boolmask: bool indicating whether env_ids is a boolean mask or not"""
+#         if boolmask:
+#             self._time_trying_command[env_ids] = torch.zeros(size=(int(env_ids.sum().item()),), device=self._device).uniform_(400, 800)
+#         else:
+#             self._time_trying_command[env_ids] = torch.zeros(size=(len(env_ids),), device=self._device).uniform_(400, 800)
         
-    def set_random_walk_commands(self, env_ids: torch.Tensor, boolmask: bool):
-        """env_ids: (E)
-        boolmask: bool indicating whether env_ids is a boolean mask or not"""
-        if boolmask:
-            env_ids = torch.where(env_ids)[0]
+#     def set_random_walk_commands(self, env_ids: torch.Tensor, boolmask: bool):
+#         """env_ids: (E)
+#         boolmask: bool indicating whether env_ids is a boolean mask or not"""
+#         if boolmask:
+#             env_ids = torch.where(env_ids)[0]
         
-        self._raw_commands[env_ids] = torch.zeros(size=(len(env_ids), 4), device=self._device).uniform_(-1.0, 1.0)
-        if self.z_is_vel:
-            self._raw_commands[env_ids,3] = 0.0 # z-axis command is 0.0 velocity
-        else:
-            self._raw_commands[env_ids,3] = self.WALKING_HEIGHT # z-axis command is walking height
+#         self._raw_commands[env_ids] = torch.zeros(size=(len(env_ids), 4), device=self._device).uniform_(-1.0, 1.0)
+#         if self.z_is_vel:
+#             self._raw_commands[env_ids,3] = 0.0 # z-axis command is 0.0 velocity
+#         else:
+#             self._raw_commands[env_ids,3] = self.WALKING_HEIGHT # z-axis command is walking height
         
-    def set_random_sit_commands(self, env_ids: torch.Tensor, boolmask: bool):
-        """env_ids: (E)
-        boolmask: bool indicating whether env_ids is a boolean mask or not"""
-        if boolmask:
-            env_ids = torch.where(env_ids)[0]
+#     def set_random_sit_commands(self, env_ids: torch.Tensor, boolmask: bool):
+#         """env_ids: (E)
+#         boolmask: bool indicating whether env_ids is a boolean mask or not"""
+#         if boolmask:
+#             env_ids = torch.where(env_ids)[0]
         
-        self._raw_commands[env_ids, :3] = 0.0
-        if self.z_is_vel:
-            self._raw_commands[env_ids, 3] = -self.MAX_Z_VEL
-        else:
-            self._raw_commands[env_ids, 3] = torch.zeros(size=(len(env_ids),), 
-                                device=self._device).uniform_(self.SITTING_HEIGHT, self.SITTING_HEIGHT+0.2)
+#         self._raw_commands[env_ids, :3] = 0.0
+#         if self.z_is_vel:
+#             self._raw_commands[env_ids, 3] = -self.MAX_Z_VEL
+#         else:
+#             self._raw_commands[env_ids, 3] = torch.zeros(size=(len(env_ids),), 
+#                                 device=self._device).uniform_(self.SITTING_HEIGHT, self.SITTING_HEIGHT+0.2)
             
-    def set_random_unsit_commands(self, env_ids: torch.Tensor, boolmask: bool):
-        """env_ids: (E)
-        boolmask: bool indicating whether env_ids is a boolean mask or not"""
-        if boolmask:
-            env_ids = torch.where(env_ids)[0]
+#     def set_random_unsit_commands(self, env_ids: torch.Tensor, boolmask: bool):
+#         """env_ids: (E)
+#         boolmask: bool indicating whether env_ids is a boolean mask or not"""
+#         if boolmask:
+#             env_ids = torch.where(env_ids)[0]
 
-        self._raw_commands[env_ids, :3] = 0.0
-        if self.z_is_vel:
-            self._raw_commands[env_ids, 3] = self.MAX_Z_VEL
-        else:
-            self._raw_commands[env_ids, 3] = self.WALKING_HEIGHT
-            # torch.zeros(size=(len(env_ids), 4), device=self._device).uniform_(self.SITTING_HEIGHT, self.WALKING_HEIGHT)
+#         self._raw_commands[env_ids, :3] = 0.0
+#         if self.z_is_vel:
+#             self._raw_commands[env_ids, 3] = self.MAX_Z_VEL
+#         else:
+#             self._raw_commands[env_ids, 3] = self.WALKING_HEIGHT
+#             # torch.zeros(size=(len(env_ids), 4), device=self._device).uniform_(self.SITTING_HEIGHT, self.WALKING_HEIGHT)
         
-    def get_commands(self) -> torch.Tensor:
-        return self._raw_commands
+#     def get_commands(self) -> torch.Tensor:
+#         return self._raw_commands
     
-    def get_high_level_commands(self) -> torch.Tensor:
-        return self._high_level_commands
+#     def get_high_level_commands(self) -> torch.Tensor:
+#         return self._high_level_commands
     
-    def set_debug_vis_impl(self, debug_vis: bool):
-        if debug_vis:
-            if not hasattr(self, "command_visualizer"):
-                marker_cfg = BLUE_ARROW_X_MARKER_CFG.copy() # Blue denotes moving
-                marker_cfg.markers["arrow"].scale = (0.5, 0.5, 0.5)
-                marker_cfg.prim_path = f"/Visuals/Command/robot/blue_arrow"
-                self.command_visualizer = VisualizationMarkers(marker_cfg)
+#     def set_debug_vis_impl(self, debug_vis: bool):
+#         if debug_vis:
+#             if not hasattr(self, "command_visualizer"):
+#                 marker_cfg = BLUE_ARROW_X_MARKER_CFG.copy() # Blue denotes moving
+#                 marker_cfg.markers["arrow"].scale = (0.5, 0.5, 0.5)
+#                 marker_cfg.prim_path = f"/Visuals/Command/robot/blue_arrow"
+#                 self.command_visualizer = VisualizationMarkers(marker_cfg)
                 
-                marker_cfg = RED_ARROW_X_MARKER_CFG.copy() # Red denotes sitting
-                marker_cfg.markers["arrow"].scale = (0.5, 0.5, 0.5)
-                marker_cfg.prim_path = f"/Visuals/Command/robot/red_arrow"
-                self._marker_cfg = marker_cfg
-                self.sit_unsit_visualizer = VisualizationMarkers(marker_cfg)
-                # marker_cfg.markers["arrow"].size = (0.05, 0.05, 0.05)
-                # marker_cfg = CUBOID_MARKER_CFG.copy()
-                # marker_cfg.markers["cuboid"].size = (0.05, 0.05, 0.05)
-                # -- goal pose
-                # set their visibility to true
-                self.command_visualizer.set_visibility(True)
-                self.sit_unsit_visualizer.set_visibility(True)
-        else:
-            if hasattr(self, "command_visualizer"):
-                self.command_visualizer.set_visibility(False)
-                self.sit_unsit_visualizer.set_visibility(False)
+#                 marker_cfg = RED_ARROW_X_MARKER_CFG.copy() # Red denotes sitting
+#                 marker_cfg.markers["arrow"].scale = (0.5, 0.5, 0.5)
+#                 marker_cfg.prim_path = f"/Visuals/Command/robot/red_arrow"
+#                 self._marker_cfg = marker_cfg
+#                 self.sit_unsit_visualizer = VisualizationMarkers(marker_cfg)
+#                 # marker_cfg.markers["arrow"].size = (0.05, 0.05, 0.05)
+#                 # marker_cfg = CUBOID_MARKER_CFG.copy()
+#                 # marker_cfg.markers["cuboid"].size = (0.05, 0.05, 0.05)
+#                 # -- goal pose
+#                 # set their visibility to true
+#                 self.command_visualizer.set_visibility(True)
+#                 self.sit_unsit_visualizer.set_visibility(True)
+#         else:
+#             if hasattr(self, "command_visualizer"):
+#                 self.command_visualizer.set_visibility(False)
+#                 self.sit_unsit_visualizer.set_visibility(False)
         
-    def debug_vis_callback(self, robot: Articulation):
-        target_loc = robot.data.root_com_pos_w.clone()  # (N,3)
-        target_loc[:, 2] += 0.5
+#     def debug_vis_callback(self, robot: Articulation):
+#         target_loc = robot.data.root_com_pos_w.clone()  # (N,3)
+#         target_loc[:, 2] += 0.5
         
-        walking_envs = self._high_level_commands == 0
-        sit_or_unsit_envs = self._high_level_commands != 0
-        xyz_commands = self._raw_commands[:, [0,1,3]].clone()
-        if not self.z_is_vel: 
-            # If it is position, then sit_or_unsit_envs should have the z-value adjusted
-            xyz_commands[sit_or_unsit_envs, 2] = robot.data.root_com_pos_w[sit_or_unsit_envs, 2] - xyz_commands[sit_or_unsit_envs, 2]
+#         walking_envs = self._high_level_commands == 0
+#         sit_or_unsit_envs = self._high_level_commands != 0
+#         xyz_commands = self._raw_commands[:, [0,1,3]].clone()
+#         if not self.z_is_vel: 
+#             # If it is position, then sit_or_unsit_envs should have the z-value adjusted
+#             xyz_commands[sit_or_unsit_envs, 2] = robot.data.root_com_pos_w[sit_or_unsit_envs, 2] - xyz_commands[sit_or_unsit_envs, 2]
             
-        arrow_scale, arrow_quat = get_arrow_settings(self._marker_cfg, xyz_commands, robot, self._device)
-        if walking_envs.sum() > 0:
-            self.command_visualizer.visualize(translations=target_loc[walking_envs], orientations=arrow_quat[walking_envs], scales=arrow_scale[walking_envs])
-        if sit_or_unsit_envs.sum() > 0:
-            self.sit_unsit_visualizer.visualize(translations=target_loc[sit_or_unsit_envs], orientations=arrow_quat[sit_or_unsit_envs], scales=arrow_scale[sit_or_unsit_envs])
+#         arrow_scale, arrow_quat = get_arrow_settings(self._marker_cfg, xyz_commands, robot, self._device)
+#         if walking_envs.sum() > 0:
+#             self.command_visualizer.visualize(translations=target_loc[walking_envs], orientations=arrow_quat[walking_envs], scales=arrow_scale[walking_envs])
+#         if sit_or_unsit_envs.sum() > 0:
+#             self.sit_unsit_visualizer.visualize(translations=target_loc[sit_or_unsit_envs], orientations=arrow_quat[sit_or_unsit_envs], scales=arrow_scale[sit_or_unsit_envs])
         
 
 

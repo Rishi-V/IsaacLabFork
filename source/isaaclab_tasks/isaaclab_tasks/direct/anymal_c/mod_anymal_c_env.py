@@ -13,9 +13,9 @@ from isaaclab.assets import Articulation
 from isaaclab.envs import DirectRLEnv
 from isaaclab.sensors import ContactSensor, RayCaster
 
-from .mod_anymal_c_env_cfg import ModAnymalCFlatEnvCfg, WalkingRewardCfg, SitUnsitRewardCfg
-from .mod_anymal_command_manager import CustomCommandManager, DynamicSkillManager
-from .mod_anymal_reward_manager import CustomRewardManager
+from .mod_anymal_c_env_cfg import ModAnymalCFlatEnvCfg #, WalkingRewardCfg, SitUnsitRewardCfg
+from .mod_anymal_command_manager import DynamicSkillManager
+# from .mod_anymal_reward_manager import CustomRewardManager
 
 ## Visualizations
 # from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
