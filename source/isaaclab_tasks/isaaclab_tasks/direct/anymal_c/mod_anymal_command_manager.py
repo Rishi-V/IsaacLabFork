@@ -22,7 +22,7 @@ def convertBoolmaskToIndices(env_ids: torch.Tensor):
 
 class AbstractSkill(ABC):
     WALKING_HEIGHT = 0.6
-    SITTING_HEIGHT = 0.1
+    SITTING_HEIGHT = 0.2
     
     def __init__(self, timeout: float, dts_memory=100):
         self._num_envs: int
@@ -35,6 +35,7 @@ class AbstractSkill(ABC):
     def set_non_params(self, num_envs: int, device: torch.device):
         self._num_envs = num_envs
         self._device = device
+        self._timeout_vec = torch.zeros(size=(num_envs,), device=self._device).uniform_(self._timeout*0.8, self._timeout)
     
     @abstractmethod
     def set_new_internals(self, env_ids: torch.Tensor, robot: Articulation) -> None:
@@ -206,7 +207,8 @@ class WalkSkill(AbstractSkill):
     def get_failures(self, env_ids: torch.Tensor, robot: Articulation) -> torch.Tensor:
         tipping_threshold = 0.8  # Define a tipping threshold, note that torch.norm(projected_gravity_b) is 1.0
         died = torch.norm(robot.data.projected_gravity_b[env_ids, :2], dim=1) > tipping_threshold
-        return died | (self._current_timestep[env_ids] > self._timeout)
+        # return died | (self._current_timestep[env_ids] > self._timeout)
+        return died | (self._current_timestep[env_ids] > self._timeout_vec[env_ids])
     
     def get_successes(self, env_ids: torch.Tensor, robot: Articulation) -> torch.Tensor:
         return self._successful_timesteps[env_ids] > self._holdtime
@@ -339,7 +341,7 @@ class ReachZSkill(AbstractSkill):
         assertIndicesNotBoolmask(env_ids)
         if self._ztarget_type == "random":
             # self._sitting_height[env_ids] = torch.rand(size=(len(env_ids),), device=self._device) * (AbstractSkill.WALKING_HEIGHT - AbstractSkill.SITTING_HEIGHT) + AbstractSkill.SITTING_HEIGHT
-            self._sitting_height[env_ids] = AbstractSkill.SITTING_HEIGHT + torch.rand(size=(len(env_ids),), device=self._device) * 0.4
+            self._sitting_height[env_ids] = AbstractSkill.SITTING_HEIGHT + torch.rand(size=(len(env_ids),), device=self._device) * 0.2
         elif self._ztarget_type == "sitting":
             self._sitting_height[env_ids] = AbstractSkill.SITTING_HEIGHT
         elif self._ztarget_type == "walking":
@@ -356,7 +358,8 @@ class ReachZSkill(AbstractSkill):
     def get_failures(self, env_ids, robot) -> torch.Tensor:
         tipping_threshold = 0.8
         died = torch.norm(robot.data.projected_gravity_b[env_ids, :2], dim=1) > tipping_threshold
-        return died | (self._current_timestep[env_ids] > self._timeout)
+        # return died | (self._current_timestep[env_ids] > self._timeout)
+        return died | (self._current_timestep[env_ids] > self._timeout_vec[env_ids])
     
     def get_successes(self, env_ids: torch.Tensor, robot: Articulation) -> torch.Tensor:
         return self._successful_timesteps[env_ids] > self._holdtime
@@ -443,8 +446,9 @@ class ReachZSkill(AbstractSkill):
 @configclass
 class SequenceOfSkillsCfg:
     skill_sequence = [
-        ("ReachZSkill", ReachZSkillCfg(timeout=400, ztarget_type="random", holdtime=50)),
-        ("ReachZSkill", ReachZSkillCfg(timeout=400, ztarget_type="walking", holdtime=50))]
+        ("ReachZSkill", ReachZSkillCfg(timeout=800, ztarget_type="random", holdtime=5)),
+        ("ReachZSkill", ReachZSkillCfg(timeout=800, ztarget_type="walking", holdtime=5)),
+        ("WalkSkill", WalkSkillCfg(timeout=800, dir=(0.0, 0.0, 0.0), holdtime=50, randomize=True)),]
     reset_on_intermediate_failures = False
     dts_memory = 100
     
