@@ -9,9 +9,9 @@ import gymnasium as gym
 import torch
 
 import isaaclab.sim as sim_utils
-from isaaclab.assets import Articulation
+from isaaclab.assets import Articulation, ArticulationCfg
 from isaaclab.envs import DirectRLEnv
-from isaaclab.sensors import ContactSensor, RayCaster
+from isaaclab.sensors import ContactSensor, ContactSensorCfg, RayCaster
 
 from .mod_anymal_c_env_cfg import ModAnymalCFlatEnvCfg #, WalkingRewardCfg, SitUnsitRewardCfg
 from .mod_anymal_command_manager import DynamicSkillManager
@@ -27,6 +27,60 @@ from .mod_anymal_command_manager import DynamicSkillManager
 --headless --video --video_length=600 --video_interval=10000 --num_envs=1024"""
 
 
+class SingleQuadruped:
+    def __init__(self, cfg, agent_name: str, robot_cfg: ArticulationCfg, 
+                 contact_sensor_cfg: ContactSensorCfg, num_envs: int):
+        self._cfg = cfg
+        self._agent_name = agent_name
+        self._robot_cfg = robot_cfg
+        self._contact_sensor_cfg = contact_sensor_cfg
+        self._num_envs = num_envs
+        
+    # def setup_scene(self):
+        self._robot = Articulation(self._robot_cfg)
+        self._contact_sensor = ContactSensor(self._contact_sensor_cfg)
+        
+    def post_setup_scene(self, device: torch.device, step_dt: float):
+        self._device = device
+        self._step_dt = step_dt
+        self._action_dim: int = self._cfg.action_spaces[self._agent_name]
+        self._action_scale = self._cfg.action_scales[self._agent_name]
+        
+        # Joint position command (deviation from default joint positions)
+        self._actions = torch.zeros(self._num_envs, gym.spaces.flatdim(self._action_dim), device=self._device) # (N,12)
+        self._previous_actions = torch.zeros(self._num_envs, gym.spaces.flatdim(self._action_dim), device=self._device) # (N,12)
+
+        # Get specific body indices
+        self._base_id, _ = self._contact_sensor.find_bodies("base")
+        self._feet_ids, _ = self._contact_sensor.find_bodies(".*FOOT")
+        self._undesired_contact_body_ids, _ = self._contact_sensor.find_bodies(".*THIGH")
+        
+    def pre_physics_step(self, actions: torch.Tensor):
+        self._actions = actions.clone()
+        self._processed_actions = self._cfg.action_scale * self._actions + self._robot.data.default_joint_pos
+        
+    def apply_action(self):
+        self._robot.set_joint_position_target(self._processed_actions)
+        
+    def get_observations(self, raw_commands: torch.Tensor) -> torch.Tensor:
+        """Returns observations for the agent.
+
+        Args:
+            raw_commands (torch.Tensor): (N,4) command vector
+
+        Returns:
+            torch.Tensor: (N,49) as of now
+        """
+        self._previous_actions = self._actions.clone()
+        obs = torch.cat([self._robot.data.root_lin_vel_b, # (N,3): Remove from actor (critic is okay)
+                    self._robot.data.root_ang_vel_b, # (N,3)
+                    self._robot.data.projected_gravity_b, # (N,3)
+                    raw_commands, # (N,4)
+                    self._robot.data.joint_pos - self._robot.data.default_joint_pos, # (N,12)
+                    self._robot.data.joint_vel, # (N,12)
+                    self._actions, # (N,12)
+                    ], dim=-1)
+        return obs
 
 
 class ModAnymalCEnv(DirectRLEnv):
@@ -41,35 +95,10 @@ class ModAnymalCEnv(DirectRLEnv):
             self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device
         ) # (N,12)
 
-        # Command manager
-        # z_is_vel = cfg.situnsit_reward_cfg.z_is_vel
-        # self.command_manager = CustomCommandManager(self.num_envs, self.device, cfg.command_cfg, z_is_vel=z_is_vel)
-        # self._commands = self.command_manager.get_commands()
+        # Skill manager
         self.skill_manager = DynamicSkillManager(self.num_envs, self.device)
         self.skill_manager.parse_cfg(cfg.dynamic_skill_cfg)
 
-        # Reward manager
-        # self.reward_manager = CustomRewardManager(self.num_envs, self.device, self.command_manager, 
-        #                                           cfg.walking_reward_cfg, cfg.situnsit_reward_cfg,
-        #                                           z_is_vel)
-
-        # Logging
-        # self._episode_sums = {
-        #     key: torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
-        #     for key in [
-        #         "track_lin_vel_xy_exp",
-        #         "track_ang_vel_z_exp",
-        #         "lin_vel_z_l2",
-        #         # "track_z_pos_l2", # RVMod: z-axis position tracking
-        #         "ang_vel_xy_l2",
-        #         "dof_torques_l2",
-        #         "dof_acc_l2",
-        #         "action_rate_l2",
-        #         "feet_air_time",
-        #         "undesired_contacts",
-        #         "flat_orientation_l2",
-        #     ]
-        # }
         # Get specific body indices
         self._base_id, _ = self._contact_sensor.find_bodies("base")
         self._feet_ids, _ = self._contact_sensor.find_bodies(".*FOOT")
@@ -77,6 +106,9 @@ class ModAnymalCEnv(DirectRLEnv):
         self.set_debug_vis(debug_vis=cfg.debug_vis)
 
     def _setup_scene(self):
+        self._robot1 = SingleQuadruped(self.cfg.robot_cfg1) # TODO: Complete this
+        self._robot1 = SingleQuadruped(self.cfg.robot_cfg2)
+        
         self._robot = Articulation(self.cfg.robot)
         self.scene.articulations["robot"] = self._robot
         self._contact_sensor = ContactSensor(self.cfg.contact_sensor)

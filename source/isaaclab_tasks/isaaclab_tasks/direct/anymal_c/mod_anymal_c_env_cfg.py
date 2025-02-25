@@ -201,9 +201,22 @@ class ModAnymalCFlatEnvCfg(DirectRLEnvCfg):
     # events: EventCfg = EventCfg()
 
     # robot
-    robot: ArticulationCfg = ANYMAL_C_CFG.replace(prim_path="/World/envs/env_.*/Robot")
-    contact_sensor: ContactSensorCfg = ContactSensorCfg(
-        prim_path="/World/envs/env_.*/Robot/.*", history_length=3, update_period=0.005, track_air_time=True
+    # robot: ArticulationCfg = ANYMAL_C_CFG.replace(prim_path="/World/envs/env_.*/Robot")
+    # contact_sensor: ContactSensorCfg = ContactSensorCfg(
+    #     prim_path="/World/envs/env_.*/Robot/.*", history_length=3, update_period=0.005, track_air_time=True
+    # )
+    
+    robot_cfg1: ArticulationCfg = ANYMAL_C_CFG.replace(prim_path="/World/envs/env_.*/Robot1")
+    robot_cfg1.init_state.pos = (-0.7, -0.7, 0.6)
+    contact_sensor1: ContactSensorCfg = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot1/.*", history_length=3, update_period=0.005, track_air_time=True,
+        debug_vis=False # RVMod
+    )
+    robot_cfg2: ArticulationCfg = ANYMAL_C_CFG.replace(prim_path="/World/envs/env_.*/Robot2")
+    robot_cfg2.init_state.pos = (0.7, 0.7, 0.6)
+    contact_sensor2: ContactSensorCfg = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot2/.*", history_length=3, update_period=0.005, track_air_time=True,
+        debug_vis=True # RVMod
     )
     
     # static other anymal
