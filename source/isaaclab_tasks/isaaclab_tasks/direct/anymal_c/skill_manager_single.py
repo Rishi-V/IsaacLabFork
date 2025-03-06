@@ -20,7 +20,7 @@ def assertIndicesNotBoolmask(env_ids: torch.Tensor):
 def convertBoolmaskToIndices(env_ids: torch.Tensor):
     return torch.where(env_ids)[0]
 
-class AbstractSkill(ABC):
+class AbstractSingleAgentSkill(ABC):
     WALKING_HEIGHT = 0.6
     SITTING_HEIGHT = 0.2
     
@@ -167,7 +167,7 @@ class WalkSkillCfg:
     randomize = True
     dts_memory = 100
 
-class WalkSkill(AbstractSkill):
+class WalkSkill(AbstractSingleAgentSkill):
     def __init__(self, reward_cfg: WalkSkillRewardCfg, timeout: float, dir: tuple[float, float, float], 
                  holdtime: int, randomize: bool, dts_memory=100):
         """
@@ -188,7 +188,7 @@ class WalkSkill(AbstractSkill):
         self._current_timestep = torch.zeros(size=(num_envs,), device=self._device)
         self._successful_timesteps = torch.zeros(size=(num_envs,), device=self._device)
         self._raw_commands = torch.zeros(size=(num_envs, 4), device=self._device) #(x,y,yaw,z)
-        self._raw_commands[:, 3] = AbstractSkill.WALKING_HEIGHT
+        self._raw_commands[:, 3] = AbstractSingleAgentSkill.WALKING_HEIGHT
     
     def set_new_internals(self, env_ids: torch.Tensor, robot: Articulation) -> None:
         assertIndicesNotBoolmask(env_ids)
@@ -315,7 +315,7 @@ class ReachZSkillCfg:
     ztarget_type = "random"
     dts_memory = 100
     
-class ReachZSkill(AbstractSkill):
+class ReachZSkill(AbstractSingleAgentSkill):
     def __init__(self, reward_cfg: ReachZSkillRewardCfg, timeout: float, 
                  holdtime: int, ztarget_type: str, dts_memory=100):
         super().__init__(timeout, dts_memory)
@@ -340,12 +340,12 @@ class ReachZSkill(AbstractSkill):
     def set_new_internals(self, env_ids: torch.Tensor, robot: Articulation) -> None:
         assertIndicesNotBoolmask(env_ids)
         if self._ztarget_type == "random":
-            # self._sitting_height[env_ids] = torch.rand(size=(len(env_ids),), device=self._device) * (AbstractSkill.WALKING_HEIGHT - AbstractSkill.SITTING_HEIGHT) + AbstractSkill.SITTING_HEIGHT
-            self._sitting_height[env_ids] = AbstractSkill.SITTING_HEIGHT + torch.rand(size=(len(env_ids),), device=self._device) * 0.2
+            # self._sitting_height[env_ids] = torch.rand(size=(len(env_ids),), device=self._device) * (AbstractSingleAgentSkill.WALKING_HEIGHT - AbstractSingleAgentSkill.SITTING_HEIGHT) + AbstractSingleAgentSkill.SITTING_HEIGHT
+            self._sitting_height[env_ids] = AbstractSingleAgentSkill.SITTING_HEIGHT + torch.rand(size=(len(env_ids),), device=self._device) * 0.2
         elif self._ztarget_type == "sitting":
-            self._sitting_height[env_ids] = AbstractSkill.SITTING_HEIGHT
+            self._sitting_height[env_ids] = AbstractSingleAgentSkill.SITTING_HEIGHT
         elif self._ztarget_type == "walking":
-            self._sitting_height[env_ids] = AbstractSkill.WALKING_HEIGHT
+            self._sitting_height[env_ids] = AbstractSingleAgentSkill.WALKING_HEIGHT
         else:
             raise ValueError(f"Unknown ztarget_type: {self._ztarget_type}")
         self._raw_commands[env_ids, 3] = self._sitting_height[env_ids]
@@ -452,12 +452,12 @@ class SequenceOfSkillsCfg:
     reset_on_intermediate_failures = False
     dts_memory = 100
     
-class SequenceOfSkills(AbstractSkill):
-    def __init__(self, skill_sequence: list[AbstractSkill], reset_on_intermediate_failures: bool, dts_memory=100):
+class SequenceOfSkills(AbstractSingleAgentSkill):
+    def __init__(self, skill_sequence: list[AbstractSingleAgentSkill], reset_on_intermediate_failures: bool, dts_memory=100):
         """Takes in a sequence of skills and executes them in order. Note no total timeout as individual skills have their own timeouts.
 
         Args:
-            skill_sequence (list[AbstractSkill]): Sequence of skills
+            skill_sequence (list[AbstractSingleAgentSkill]): Sequence of skills
             reset_on_intermediate_failures (bool): Whether to reset on intermediate failures. Recommended to be False.
             dts_memory (int, optional): Defaults to 100.
         """
@@ -574,7 +574,7 @@ class DynamicSkillCfg:
         ("SequenceOfSkillsCfg", SequenceOfSkillsCfg(), 1.0),
         ("ReachZSkill", ReachZSkillCfg(ztarget_type="sitting"), 0.5)]
     
-def parse_cfg_skills(skill_name, skill_cfg) -> AbstractSkill:
+def parse_cfg_skills(skill_name, skill_cfg) -> AbstractSingleAgentSkill:
     if skill_name == "WalkSkill":
         skill_cfg["reward_cfg"] = WalkSkillRewardCfg(**skill_cfg["reward_cfg"])
         skill = WalkSkill(**skill_cfg)
@@ -592,7 +592,7 @@ class DynamicSkillManager:
     def __init__(self, num_envs: int, device: torch.device):
         self._num_envs = num_envs
         self._device = device
-        self._skills: list[AbstractSkill] = []
+        self._skills: list[AbstractSingleAgentSkill] = []
         self._probs: list[float] = []
         
     def parse_cfg(self, skills_cfg: DynamicSkillCfg):

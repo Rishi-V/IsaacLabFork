@@ -10,7 +10,7 @@ import torch
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation, ArticulationCfg
-from isaaclab.envs import DirectRLEnv
+from isaaclab.envs import DirectMARLEnv
 from isaaclab.sensors import ContactSensor, ContactSensorCfg, RayCaster
 
 from .mod_anymal_c_env_cfg import ModAnymalCFlatEnvCfg #, WalkingRewardCfg, SitUnsitRewardCfg
@@ -82,8 +82,16 @@ class SingleQuadruped:
                     ], dim=-1)
         return obs
 
+    def get_robot(self):
+        return self._robot
+    
+    def get_contact_sensor(self):
+        return self._contact_sensor
+    
+    def get_name(self):
+        return self._agent_name
 
-class ModAnymalCEnv(DirectRLEnv):
+class ModAnymalCEnv(DirectMARLEnv):
     cfg: ModAnymalCFlatEnvCfg
 
     def __init__(self, cfg: ModAnymalCFlatEnvCfg, render_mode: str | None = None, **kwargs):
@@ -100,26 +108,20 @@ class ModAnymalCEnv(DirectRLEnv):
         self.skill_manager.parse_cfg(cfg.dynamic_skill_cfg)
 
         # Get specific body indices
-        self._base_id, _ = self._contact_sensor.find_bodies("base")
-        self._feet_ids, _ = self._contact_sensor.find_bodies(".*FOOT")
-        self._undesired_contact_body_ids, _ = self._contact_sensor.find_bodies(".*THIGH")
+        # self._base_id, _ = self._contact_sensor.find_bodies("base")
+        # self._feet_ids, _ = self._contact_sensor.find_bodies(".*FOOT")
+        # self._undesired_contact_body_ids, _ = self._contact_sensor.find_bodies(".*THIGH")
         self.set_debug_vis(debug_vis=cfg.debug_vis)
 
     def _setup_scene(self):
-        self._robot1 = SingleQuadruped(self.cfg.robot_cfg1) # TODO: Complete this
-        self._robot1 = SingleQuadruped(self.cfg.robot_cfg2)
+        self._robot1 = SingleQuadruped(self.cfg, "robot1", self.cfg.robot_cfg1, self.cfg.contact_sensor1, self.num_envs)
+        self._robot2 = SingleQuadruped(self.cfg, "robot2", self.cfg.robot_cfg2, self.cfg.contact_sensor2, self.num_envs)
+        self._all_robots = {"robot1": self._robot1, "robot2": self._robot2}
         
-        self._robot = Articulation(self.cfg.robot)
-        self.scene.articulations["robot"] = self._robot
-        self._contact_sensor = ContactSensor(self.cfg.contact_sensor)
-        self.scene.sensors["contact_sensor"] = self._contact_sensor
-        # Add height scanner
-        # self._height_scanner = RayCaster(self.cfg.height_scanner)
-        # self.scene.sensors["height_scanner"] = self._height_scanner
-        
-        ### Add static anymal
-        # self._static_anymal = Articulation(self.cfg.static_anymal)
-        # self.scene.articulations["static_anymal"] = self._static_anymal
+        self.scene.articulations["robot1"] = self._robot1.get_robot()
+        self.scene.articulations["robot2"] = self._robot2.get_robot()
+        self.scene.sensors["contact_sensor1"] = self._robot1.get_contact_sensor()
+        self.scene.sensors["contact_sensor2"] = self._robot2.get_contact_sensor()
         
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
@@ -130,39 +132,43 @@ class ModAnymalCEnv(DirectRLEnv):
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
 
-    def _pre_physics_step(self, actions: torch.Tensor):
-        self._actions = actions.clone()
-        self._processed_actions = self.cfg.action_scale * self._actions + self._robot.data.default_joint_pos
+    def _pre_physics_step(self, actions: dict[str, torch.Tensor]):
+        self._robot1.pre_physics_step(actions[self._robot1.get_name()])
+        self._robot2.pre_physics_step(actions[self._robot2.get_name()])
+        # self._actions = actions.clone()
+        # self._processed_actions = self.cfg.action_scale * self._actions + self._robot.data.default_joint_pos
 
     def _apply_action(self):
-        self._robot.set_joint_position_target(self._processed_actions)
+        self._robot1.apply_action()
+        self._robot2.apply_action()
 
     def _get_observations(self) -> dict:
-        self.skill_manager.update(self._robot)
-        raw_commands = self.skill_manager.get_raw_commands()
-        # self.command_manager.update_commands(self._robot) # Update actions before getting observations
-        self._previous_actions = self._actions.clone()
-        # height_data = (
-        #     self._height_scanner.data.pos_w[:, 2].unsqueeze(1) - self._height_scanner.data.ray_hits_w[..., 2] - 0.5
-        # ).clip(-1.0, 1.0)
-        obs = torch.cat([self._robot.data.root_lin_vel_b, # (N,3): Remove from actor (critic is okay)
-                    self._robot.data.root_ang_vel_b, # (N,3)
-                    self._robot.data.projected_gravity_b, # (N,3)
-                    # self.command_manager.get_commands(), # (N,4)
-                    raw_commands, # (N,4)
-                    self._robot.data.joint_pos - self._robot.data.default_joint_pos, # (N,12)
-                    self._robot.data.joint_vel, # (N,12)
-                    # height_data,
-                    self._actions, # (N,12)
-                    # self.get_static_anymal_obs(), # (N,37)
-                    ], dim=-1)
-        observations = {"policy": obs}
+        self.skill_manager.update(self._all_robots)
+        raw_commands = self.skill_manager.get_raw_commands() # Dictionary str: (N,4)
+        observations = dict()
+        observations["robot1"] = self._robot1.get_observations(raw_commands["robot1"])
+        observations["robot2"] = self._robot2.get_observations(raw_commands["robot2"])
+        
+        # # self.command_manager.update_commands(self._robot) # Update actions before getting observations
+        # self._previous_actions = self._actions.clone()
+        # # height_data = (
+        # #     self._height_scanner.data.pos_w[:, 2].unsqueeze(1) - self._height_scanner.data.ray_hits_w[..., 2] - 0.5
+        # # ).clip(-1.0, 1.0)
+        # obs = torch.cat([self._robot.data.root_lin_vel_b, # (N,3): Remove from actor (critic is okay)
+        #             self._robot.data.root_ang_vel_b, # (N,3)
+        #             self._robot.data.projected_gravity_b, # (N,3)
+        #             # self.command_manager.get_commands(), # (N,4)
+        #             raw_commands, # (N,4)
+        #             self._robot.data.joint_pos - self._robot.data.default_joint_pos, # (N,12)
+        #             self._robot.data.joint_vel, # (N,12)
+        #             # height_data,
+        #             self._actions, # (N,12)
+        #             # self.get_static_anymal_obs(), # (N,37)
+        #             ], dim=-1)
+        # observations = {"policy": obs}
         return observations
     
     def _get_rewards(self) -> torch.Tensor:
-        # self._commands = self.command_manager.get_commands()
-        # rewards = self.reward_manager.compute_rewards(self._robot, self._actions, self._previous_actions, self._contact_sensor, 
-        #                                     self.step_dt, self._feet_ids, self._undesired_contact_body_ids)
         rewards = self.skill_manager.compute_rewards(self._robot, self._actions, self._previous_actions, self._contact_sensor,
                                                         self.step_dt, self._feet_ids, self._undesired_contact_body_ids)
         return rewards
