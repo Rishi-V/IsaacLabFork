@@ -1,6 +1,6 @@
 import torch
 
-from isaaclab.assets import Articulation
+from isaaclab.assets import Articulation, ArticulationData
 from isaaclab.sensors import ContactSensor
 
 ## Visualizations
@@ -12,6 +12,8 @@ import isaaclab.utils.math as math_utils
 from abc import ABC, abstractmethod
 from isaaclab.utils import configclass
 import pdb
+
+from single_quadruped import SingleQuadruped
 
 def assertIndicesNotBoolmask(env_ids: torch.Tensor):
     # assert env_ids.dtype == torch.long, "env_ids should be a tensor of indices, not a boolean mask"
@@ -38,12 +40,12 @@ class AbstractSingleAgentSkill(ABC):
         self._timeout_vec = torch.zeros(size=(num_envs,), device=self._device).uniform_(self._timeout*0.8, self._timeout)
     
     @abstractmethod
-    def set_new_internals(self, env_ids: torch.Tensor, robot: Articulation) -> None:
+    def set_new_internals(self, env_ids: torch.Tensor, quadruped: SingleQuadruped) -> None:
         """Sets the new internals for the given env_ids
 
         Args:
             env_ids (torch.Tensor): (E) indices
-            robot (Articulation): Robot
+            quadruped (SingleQuadruped)
         """
         raise NotImplementedError("This method should be overridden by subclasses")
     
@@ -60,12 +62,12 @@ class AbstractSingleAgentSkill(ABC):
         raise NotImplementedError("This method should be overridden by subclasses")
     
     @abstractmethod
-    def get_failures(self, env_ids: torch.Tensor, robot: Articulation) -> torch.Tensor:
+    def get_failures(self, env_ids: torch.Tensor, quadruped: SingleQuadruped) -> torch.Tensor:
         """Returns a (N) boolean vector of envs that have failed the skill
 
         Args:
             env_ids (torch.Tensor): (N) boolean mask
-            robot (Articulation): Robot
+            quadruped (SingleQuadruped)
 
         Returns:
             torch.Tensor: (E) boolean vector of envs that have failed the skill
@@ -73,12 +75,12 @@ class AbstractSingleAgentSkill(ABC):
         raise NotImplementedError("This method should be overridden by subclasses")
     
     @abstractmethod
-    def get_successes(self, env_ids: torch.Tensor, robot: Articulation) -> torch.Tensor:
+    def get_successes(self, env_ids: torch.Tensor, quadruped: SingleQuadruped) -> torch.Tensor:
         """Returns a (N) boolean vector of envs that have completed the skill
 
         Args:
             env_ids (torch.Tensor): (N) boolean mask
-            robot (Articulation): Robot
+            quadruped (SingleQuadruped)
 
         Returns:
             torch.Tensor: (E) boolean vector of envs that have completed the skill
@@ -86,12 +88,12 @@ class AbstractSingleAgentSkill(ABC):
         raise NotImplementedError("This method should be overridden by subclasses")
     
     @abstractmethod
-    def update(self, env_ids: torch.Tensor, robot: Articulation) -> None:
+    def update(self, env_ids: torch.Tensor, quadruped: SingleQuadruped) -> None:
         """Updates the internals for the given env_ids, e.g., timesteps, raw_commands, etc.
 
         Args:
             env_ids (torch.Tensor): (N) boolean mask
-            robot (Articulation): Robot
+            quadruped (SingleQuadruped)
         """
         raise NotImplementedError("This method should be overridden by subclasses")
     
@@ -100,19 +102,16 @@ class AbstractSingleAgentSkill(ABC):
         raise NotImplementedError("This method should be overridden by subclasses")
     
     @abstractmethod
-    def debug_vis_callback(self, env_ids: torch.Tensor, robot: Articulation):
+    def debug_vis_callback(self, env_ids: torch.Tensor, quadruped: SingleQuadruped):
         raise NotImplementedError("This method should be overridden by subclasses")
     
     @abstractmethod
-    def compute_rewards(self, env_ids: torch.Tensor, robot: Articulation, 
-                                actions: torch.Tensor, previous_actions: torch.Tensor,
-                                contact_sensor: ContactSensor, step_dt: float,
-                                feet_ids: list[int], undesired_contact_body_ids: list[int]) -> torch.Tensor:
+    def compute_rewards(self, env_ids: torch.Tensor, quadruped: SingleQuadruped) -> torch.Tensor:
         """Returns the (E) reward tensor for the given env_ids. Also logs the reward components.
 
         Args:
             env_ids (torch.Tensor): (N) boolean mask
-            robot (Articulation): Robot
+            quadruped (SingleQuadruped)
 
         Returns:
             torch.Tensor: reward vector
@@ -190,7 +189,7 @@ class WalkSkill(AbstractSingleAgentSkill):
         self._raw_commands = torch.zeros(size=(num_envs, 4), device=self._device) #(x,y,yaw,z)
         self._raw_commands[:, 3] = AbstractSingleAgentSkill.WALKING_HEIGHT
     
-    def set_new_internals(self, env_ids: torch.Tensor, robot: Articulation) -> None:
+    def set_new_internals(self, env_ids: torch.Tensor, quadruped: SingleQuadruped) -> None:
         assertIndicesNotBoolmask(env_ids)
         if self._randomize:
             # Randomly sample from [-1,1] for x,y,yaw
@@ -204,19 +203,21 @@ class WalkSkill(AbstractSingleAgentSkill):
     def get_raw_command(self, env_ids: torch.Tensor) -> torch.Tensor:
         return self._raw_commands[env_ids]
     
-    def get_failures(self, env_ids: torch.Tensor, robot: Articulation) -> torch.Tensor:
+    def get_failures(self, env_ids: torch.Tensor, quadruped: SingleQuadruped) -> torch.Tensor:
         tipping_threshold = 0.8  # Define a tipping threshold, note that torch.norm(projected_gravity_b) is 1.0
-        died = torch.norm(robot.data.projected_gravity_b[env_ids, :2], dim=1) > tipping_threshold
+        robot_data = quadruped.get_robot().data
+        died = torch.norm(robot_data.projected_gravity_b[env_ids, :2], dim=1) > tipping_threshold
         # return died | (self._current_timestep[env_ids] > self._timeout)
         return died | (self._current_timestep[env_ids] > self._timeout_vec[env_ids])
     
-    def get_successes(self, env_ids: torch.Tensor, robot: Articulation) -> torch.Tensor:
+    def get_successes(self, env_ids: torch.Tensor, quadruped: SingleQuadruped) -> torch.Tensor:
         return self._successful_timesteps[env_ids] > self._holdtime
     
-    def update(self, env_ids: torch.Tensor, robot: Articulation) -> None:
+    def update(self, env_ids: torch.Tensor, quadruped: SingleQuadruped) -> None:
         self._current_timestep[env_ids] += 1
-        lin_vel_error = torch.sum(torch.square(self._raw_commands[:, :2] - robot.data.root_lin_vel_b[:, :2]), dim=1) < 0.1 # (N)
-        yaw_rate_error = torch.square(self._raw_commands[:, 2] - robot.data.root_ang_vel_b[:, 2]) < 0.1 # (N)
+        robot_data = quadruped.get_robot().data
+        lin_vel_error = torch.sum(torch.square(self._raw_commands[:, :2] - robot_data.root_lin_vel_b[:, :2]), dim=1) < 0.1 # (N)
+        yaw_rate_error = torch.square(self._raw_commands[:, 2] - robot_data.root_ang_vel_b[:, 2]) < 0.1 # (N)
         successful_walks = env_ids & lin_vel_error & yaw_rate_error # (N)
         self._successful_timesteps[successful_walks] += 1
     
@@ -233,34 +234,41 @@ class WalkSkill(AbstractSingleAgentSkill):
             if hasattr(self, "_visualizer_marker"):
                 self._visualizer_marker.set_visibility(False)
                 
-    def debug_vis_callback(self, env_ids: torch.Tensor, robot: Articulation):
-        target_loc = robot.data.root_com_pos_w.clone()  # (N,3)
+    def debug_vis_callback(self, env_ids: torch.Tensor, quadruped: SingleQuadruped):
+        robot_data = quadruped.get_robot().data
+        target_loc = robot_data.root_com_pos_w.clone()  # (N,3)
         target_loc[:, 2] += 0.5
         
         xyz_commands = self._raw_commands[:, [0,1,3]].clone()
-        xyz_commands[:, 2] = xyz_commands[:, 2] - robot.data.root_com_pos_w[:, 2]
+        xyz_commands[:, 2] = xyz_commands[:, 2] - robot_data.root_com_pos_w[:, 2]
             
-        arrow_scale, arrow_quat = get_arrow_settings(self._marker_cfg, xyz_commands, robot, self._device)
+        arrow_scale, arrow_quat = get_arrow_settings(self._marker_cfg, xyz_commands, robot_data, self._device)
         self._visualizer_marker.visualize(translations=target_loc[env_ids], orientations=arrow_quat[env_ids], scales=arrow_scale[env_ids])     
     
-    def compute_rewards(self, env_ids: torch.Tensor, robot: Articulation, 
-                                actions: torch.Tensor, previous_actions: torch.Tensor,
-                                contact_sensor: ContactSensor, step_dt: float,
-                                feet_ids: list[int], undesired_contact_body_ids: list[int]) -> torch.Tensor:
+    def compute_rewards(self, env_ids: torch.Tensor, quadruped: SingleQuadruped) -> torch.Tensor:
+        # Extract what we need from robot
+        robot_data: ArticulationData = quadruped.get_robot().data
+        actions: torch.Tensor = quadruped.get_actions()
+        previous_actions: torch.Tensor = quadruped.get_previous_actions()
+        contact_sensor: ContactSensor = quadruped.get_contact_sensor()
+        step_dt: float = quadruped.get_step_dt()
+        feet_ids: list[int] = quadruped.get_feet_ids()
+        undesired_contact_body_ids: list[int] = quadruped.get_undesired_contact_body_ids()
+        
         # linear velocity tracking
-        lin_vel_error = torch.sum(torch.square(self._raw_commands[:, :2] - robot.data.root_lin_vel_b[:, :2]), dim=1)
+        lin_vel_error = torch.sum(torch.square(self._raw_commands[:, :2] - robot_data.root_lin_vel_b[:, :2]), dim=1)
         lin_vel_error_mapped = torch.exp(-lin_vel_error / 0.25)
         # yaw rate tracking
-        yaw_rate_error = torch.square(self._raw_commands[:, 2] - robot.data.root_ang_vel_b[:, 2])
+        yaw_rate_error = torch.square(self._raw_commands[:, 2] - robot_data.root_ang_vel_b[:, 2])
         yaw_rate_error_mapped = torch.exp(-yaw_rate_error / 0.25)
         # z position tracking
-        z_error = torch.square(robot.data.root_com_pos_w[:, 2] - self._raw_commands[:, 3])
+        z_error = torch.square(robot_data.root_com_pos_w[:, 2] - self._raw_commands[:, 3])
         # angular velocity x/y
-        ang_vel_error = torch.sum(torch.square(robot.data.root_ang_vel_b[:, :2]), dim=1)
+        ang_vel_error = torch.sum(torch.square(robot_data.root_ang_vel_b[:, :2]), dim=1)
         # joint torques
-        joint_torques = torch.sum(torch.square(robot.data.applied_torque), dim=1)
+        joint_torques = torch.sum(torch.square(robot_data.applied_torque), dim=1)
         # joint acceleration
-        joint_accel = torch.sum(torch.square(robot.data.joint_acc), dim=1)
+        joint_accel = torch.sum(torch.square(robot_data.joint_acc), dim=1)
         # action rate
         action_rate = torch.sum(torch.square(actions - previous_actions), dim=1)
         # feet air time
@@ -276,7 +284,7 @@ class WalkSkill(AbstractSingleAgentSkill):
         )
         contacts = torch.sum(is_contact, dim=1)
         # flat orientation
-        flat_orientation = torch.sum(torch.square(robot.data.projected_gravity_b[:, :2]), dim=1)
+        flat_orientation = torch.sum(torch.square(robot_data.projected_gravity_b[:, :2]), dim=1)
 
         ### Compute rewards
         rewards_dict = {
@@ -337,7 +345,7 @@ class ReachZSkill(AbstractSingleAgentSkill):
         self._sitting_height = torch.zeros(size=(num_envs,), device=self._device)
         self._raw_commands = torch.zeros(size=(num_envs, 4), device=self._device)
 
-    def set_new_internals(self, env_ids: torch.Tensor, robot: Articulation) -> None:
+    def set_new_internals(self, env_ids: torch.Tensor, quadruped: SingleQuadruped) -> None:
         assertIndicesNotBoolmask(env_ids)
         if self._ztarget_type == "random":
             # self._sitting_height[env_ids] = torch.rand(size=(len(env_ids),), device=self._device) * (AbstractSingleAgentSkill.WALKING_HEIGHT - AbstractSingleAgentSkill.SITTING_HEIGHT) + AbstractSingleAgentSkill.SITTING_HEIGHT
@@ -355,18 +363,20 @@ class ReachZSkill(AbstractSingleAgentSkill):
     def get_raw_command(self, env_ids: torch.Tensor) -> torch.Tensor:
         return self._raw_commands[env_ids]
     
-    def get_failures(self, env_ids, robot) -> torch.Tensor:
+    def get_failures(self, env_ids, quadruped: SingleQuadruped) -> torch.Tensor:
         tipping_threshold = 0.8
-        died = torch.norm(robot.data.projected_gravity_b[env_ids, :2], dim=1) > tipping_threshold
+        robot_data = quadruped.get_robot().data
+        died = torch.norm(robot_data.projected_gravity_b[env_ids, :2], dim=1) > tipping_threshold
         # return died | (self._current_timestep[env_ids] > self._timeout)
         return died | (self._current_timestep[env_ids] > self._timeout_vec[env_ids])
     
-    def get_successes(self, env_ids: torch.Tensor, robot: Articulation) -> torch.Tensor:
+    def get_successes(self, env_ids: torch.Tensor, quadruped: SingleQuadruped) -> torch.Tensor:
         return self._successful_timesteps[env_ids] > self._holdtime
     
-    def update(self, env_ids: torch.Tensor, robot: Articulation) -> None:
+    def update(self, env_ids: torch.Tensor, quadruped: SingleQuadruped) -> None:
         self._current_timestep[env_ids] += 1
-        sitting_robots = torch.abs(robot.data.root_com_pos_w[:,2] - self._sitting_height) < 0.1 # (N)
+        robot_data = quadruped.get_robot().data
+        sitting_robots = torch.abs(robot_data.root_com_pos_w[:,2] - self._sitting_height) < 0.1 # (N)
         successful_sits = env_ids & sitting_robots # (N)
         self._successful_timesteps[successful_sits] += 1
     
@@ -383,35 +393,42 @@ class ReachZSkill(AbstractSingleAgentSkill):
             if hasattr(self, "_visualizer_marker"):
                 self._visualizer_marker.set_visibility(False)
                 
-    def debug_vis_callback(self, env_ids: torch.Tensor, robot: Articulation):
-        target_loc = robot.data.root_com_pos_w.clone()
+    def debug_vis_callback(self, env_ids: torch.Tensor, quadruped: SingleQuadruped):
+        robot_data = quadruped.get_robot().data
+        target_loc = robot_data.root_com_pos_w.clone()
         target_loc[:, 2] += 0.5
         
         xyz_commands = self._raw_commands[:, [0,1,3]].clone()
-        xyz_commands[:, 2] = xyz_commands[:, 2] - robot.data.root_com_pos_w[:, 2] # Change to z direction
+        xyz_commands[:, 2] = xyz_commands[:, 2] - robot_data.root_com_pos_w[:, 2] # Change to z direction
         
-        arrow_scale, arrow_quat = get_arrow_settings(self._marker_cfg, xyz_commands, robot, self._device)
+        arrow_scale, arrow_quat = get_arrow_settings(self._marker_cfg, xyz_commands, robot_data, self._device)
         self._visualizer_marker.visualize(translations=target_loc[env_ids], orientations=arrow_quat[env_ids], scales=arrow_scale[env_ids])
         
-    def compute_rewards(self, env_ids: torch.Tensor, robot: Articulation,
-                                actions: torch.Tensor, previous_actions: torch.Tensor,
-                                contact_sensor: ContactSensor, step_dt: float,
-                                feet_ids: list[int], undesired_contact_body_ids: list[int]) -> torch.Tensor:
+    def compute_rewards(self, env_ids: torch.Tensor, quadruped: SingleQuadruped) -> torch.Tensor:
+        # Extract what we need from robot
+        robot_data: ArticulationData = quadruped.get_robot().data
+        actions: torch.Tensor = quadruped.get_actions()
+        previous_actions: torch.Tensor = quadruped.get_previous_actions()
+        contact_sensor: ContactSensor = quadruped.get_contact_sensor()
+        step_dt: float = quadruped.get_step_dt()
+        feet_ids: list[int] = quadruped.get_feet_ids()
+        undesired_contact_body_ids: list[int] = quadruped.get_undesired_contact_body_ids()
+        
         # linear velocity tracking
-        lin_vel_error = torch.sum(torch.square(self._raw_commands[:, :2] - robot.data.root_lin_vel_b[:, :2]), dim=1)
+        lin_vel_error = torch.sum(torch.square(self._raw_commands[:, :2] - robot_data.root_lin_vel_b[:, :2]), dim=1)
         lin_vel_error_mapped = torch.exp(-lin_vel_error / 0.25)
         # yaw rate tracking
-        yaw_rate_error = torch.square(self._raw_commands[:, 2] - robot.data.root_ang_vel_b[:, 2])
+        yaw_rate_error = torch.square(self._raw_commands[:, 2] - robot_data.root_ang_vel_b[:, 2])
         yaw_rate_error_mapped = torch.exp(-yaw_rate_error / 0.25)
         # z position tracking
-        z_error = torch.square(robot.data.root_com_pos_w[:, 2] - self._raw_commands[:, 3])
+        z_error = torch.square(robot_data.root_com_pos_w[:, 2] - self._raw_commands[:, 3])
         z_error_mapped = torch.exp(-z_error / 0.25) # RVMod
         # angular velocity x/y
-        ang_vel_error = torch.sum(torch.square(robot.data.root_ang_vel_b[:, :2]), dim=1)
+        ang_vel_error = torch.sum(torch.square(robot_data.root_ang_vel_b[:, :2]), dim=1)
         # joint torques
-        joint_torques = torch.sum(torch.square(robot.data.applied_torque), dim=1)
+        joint_torques = torch.sum(torch.square(robot_data.applied_torque), dim=1)
         # joint acceleration
-        joint_accel = torch.sum(torch.square(robot.data.joint_acc), dim=1)
+        joint_accel = torch.sum(torch.square(robot_data.joint_acc), dim=1)
         # action rate
         action_rate = torch.sum(torch.square(actions - previous_actions), dim=1)
         # undesired contacts
@@ -421,7 +438,7 @@ class ReachZSkill(AbstractSingleAgentSkill):
         )
         contacts = torch.sum(is_contact, dim=1)
         # flat orientation
-        flat_orientation = torch.sum(torch.square(robot.data.projected_gravity_b[:, :2]), dim=1)
+        flat_orientation = torch.sum(torch.square(robot_data.projected_gravity_b[:, :2]), dim=1)
         flat_orientation_mapped = torch.exp(-flat_orientation / 0.25) # RVMod
 
         ### Compute walking rewards
@@ -478,10 +495,10 @@ class SequenceOfSkills(AbstractSingleAgentSkill):
         # Initialize the env_to_skill_index to 0 for all envs
         self._env_to_skill_index = torch.zeros(size=(num_envs,), device=self._device, dtype=torch.long)
         
-    def set_new_internals(self, env_ids: torch.Tensor, robot: Articulation) -> None:
+    def set_new_internals(self, env_ids: torch.Tensor, quadruped: SingleQuadruped) -> None:
         assertIndicesNotBoolmask(env_ids)
         self._env_to_skill_index[env_ids] = 0
-        self._skill_sequence[0].set_new_internals(env_ids, robot)
+        self._skill_sequence[0].set_new_internals(env_ids, quadruped)
             
     def get_raw_command(self, env_ids: torch.Tensor) -> torch.Tensor:
         raw_commands = torch.zeros(size=(self._num_envs, 4), device=self._device)
@@ -491,38 +508,38 @@ class SequenceOfSkills(AbstractSingleAgentSkill):
                 raw_commands[skill_env_ids] = skill.get_raw_command(skill_env_ids)
         return raw_commands[env_ids]
     
-    def get_failures(self, env_ids: torch.Tensor, robot: Articulation) -> torch.Tensor:
+    def get_failures(self, env_ids: torch.Tensor, quadruped: SingleQuadruped) -> torch.Tensor:
         failures = torch.zeros(size=(self._num_envs,), device=self._device, dtype=torch.bool)
         if self._reset_on_intermediate_failures: # If reset on intermerdiate failures, check all skills
             for i, skill in enumerate(self._skill_sequence):
                 skill_env_ids = env_ids & (self._env_to_skill_index == i) # (N)
                 if skill_env_ids.any():
-                    failures[skill_env_ids] = skill.get_failures(skill_env_ids, robot) # (E) boolean
+                    failures[skill_env_ids] = skill.get_failures(skill_env_ids, quadruped) # (E) boolean
         else: # If not, just check last skill
             last_index = len(self._skill_sequence) - 1
             skill_env_ids = env_ids & (self._env_to_skill_index == last_index)
             if skill_env_ids.any():
-                failures[skill_env_ids] = self._skill_sequence[last_index].get_failures(skill_env_ids, robot)
+                failures[skill_env_ids] = self._skill_sequence[last_index].get_failures(skill_env_ids, quadruped)
         return failures[env_ids]
     
-    def get_successes(self, env_ids: torch.Tensor, robot: Articulation) -> torch.Tensor:
+    def get_successes(self, env_ids: torch.Tensor, quadruped: SingleQuadruped) -> torch.Tensor:
         successes = torch.zeros(size=(self._num_envs,), device=self._device, dtype=torch.bool) # (N)
         last_index = len(self._skill_sequence) - 1
         skill_env_ids = env_ids & (self._env_to_skill_index == last_index) # (N)
         if skill_env_ids.any():
-            successes[skill_env_ids] = self._skill_sequence[last_index].get_successes(skill_env_ids, robot) # (E)
+            successes[skill_env_ids] = self._skill_sequence[last_index].get_successes(skill_env_ids, quadruped) # (E)
         return successes[env_ids]
     
-    def update(self, env_ids: torch.Tensor, robot: Articulation) -> None:
+    def update(self, env_ids: torch.Tensor, quadruped: SingleQuadruped) -> None:
         increment_envs = torch.zeros(size=(self._num_envs,), device=self._device, dtype=torch.bool)
         for i, skill in enumerate(self._skill_sequence):
             skill_env_ids = env_ids & (self._env_to_skill_index == i)
             if skill_env_ids.any():
-                skill.update(skill_env_ids, robot)
+                skill.update(skill_env_ids, quadruped)
                 # If skill is finished, move to next skill
-                increment_envs[skill_env_ids] = skill.get_successes(skill_env_ids, robot) # (E) boolean
+                increment_envs[skill_env_ids] = skill.get_successes(skill_env_ids, quadruped) # (E) boolean
                 if not self._reset_on_intermediate_failures: # If not reset, instead increment if failed
-                    increment_envs[skill_env_ids] |= skill.get_failures(skill_env_ids, robot) # (E) boolean
+                    increment_envs[skill_env_ids] |= skill.get_failures(skill_env_ids, quadruped) # (E) boolean
                 
         ### Increment envs that finished a skill and set new internals for the next skill
         # Note: Finishing the last skill will increment the index but will not set new internals
@@ -530,7 +547,7 @@ class SequenceOfSkills(AbstractSingleAgentSkill):
         for i, skill in enumerate(self._skill_sequence):
             new_skill_envs = increment_envs & (self._env_to_skill_index == i) # (N)
             if new_skill_envs.any():
-                skill.set_new_internals(convertBoolmaskToIndices(new_skill_envs), robot)
+                skill.set_new_internals(convertBoolmaskToIndices(new_skill_envs), quadruped)
         
         # Clamp the index to the last skill
         self._env_to_skill_index[env_ids] = torch.clamp(self._env_to_skill_index[env_ids], 0, len(self._skill_sequence) - 1)
@@ -539,22 +556,18 @@ class SequenceOfSkills(AbstractSingleAgentSkill):
         for skill in self._skill_sequence:
             skill.set_debug_vis_impl(debug_vis)
             
-    def debug_vis_callback(self, env_ids: torch.Tensor, robot: Articulation):
+    def debug_vis_callback(self, env_ids: torch.Tensor, quadruped: SingleQuadruped):
         for i, skill in enumerate(self._skill_sequence):
             skill_env_ids = env_ids & (self._env_to_skill_index == i)
             if skill_env_ids.any():
-                skill.debug_vis_callback(skill_env_ids, robot)
+                skill.debug_vis_callback(skill_env_ids, quadruped)
                 
-    def compute_rewards(self, env_ids: torch.Tensor, robot: Articulation,
-                                actions: torch.Tensor, previous_actions: torch.Tensor,
-                                contact_sensor: ContactSensor, step_dt: float,
-                                feet_ids: list[int], undesired_contact_body_ids: list[int]) -> torch.Tensor:
+    def compute_rewards(self, env_ids: torch.Tensor, quadruped: SingleQuadruped) -> torch.Tensor:
         rewards = torch.zeros(size=(self._num_envs,), device=self._device)
         for i, skill in enumerate(self._skill_sequence):
             skill_env_ids = env_ids & (self._env_to_skill_index == i)
             if skill_env_ids.any():
-                rewards[skill_env_ids] = skill.compute_rewards(skill_env_ids, robot, actions, previous_actions,
-                                                                contact_sensor, step_dt, feet_ids, undesired_contact_body_ids)
+                rewards[skill_env_ids] = skill.compute_rewards(skill_env_ids, quadruped)
         assert torch.all(rewards[env_ids] != 0), "All rewards should be non-zero"
         return rewards[env_ids]
     
@@ -670,7 +683,7 @@ class DynamicSkillManager:
 
 
 def get_arrow_settings(arrow_cfg: VisualizationMarkersCfg, xyz_velocity: torch.Tensor, 
-                       robot: Articulation, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
+                       robot_data: ArticulationData, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
     """Converts the XYZ base velocity command to arrow direction rotation."""
     # obtain default scale of the marker
     default_scale = arrow_cfg.markers["arrow"].scale
@@ -683,7 +696,7 @@ def get_arrow_settings(arrow_cfg: VisualizationMarkersCfg, xyz_velocity: torch.T
     pitch_angle = torch.atan2(xyz_velocity[:, 2], torch.linalg.norm(xyz_velocity[:,:2], dim=1)) # Add negative sign to z-axis?
     arrow_quat = math_utils.quat_from_euler_xyz(zeros, pitch_angle, heading_angle)
     # convert everything back from base to world frame
-    base_quat_w = robot.data.root_quat_w
+    base_quat_w = robot_data.root_quat_w
     arrow_quat = math_utils.quat_mul(base_quat_w, arrow_quat)
 
     return arrow_scale, arrow_quat

@@ -99,7 +99,7 @@ class AbstractDoubleAgentSkill(ABC):
     def compute_rewards(self, env_ids: torch.Tensor, robot_dict: dict[str, Articulation], 
                                 actions: torch.Tensor, previous_actions: torch.Tensor,
                                 contact_sensor: ContactSensor, step_dt: float,
-                                feet_ids: list[int], undesired_contact_body_ids: list[int]) -> torch.Tensor:
+                                feet_ids: list[int], undesired_contact_body_ids: list[int]) -> dict[str, torch.Tensor]:
         """Returns the (E) reward tensor for the given env_ids. Also logs the reward components.
 
         Args:
@@ -107,7 +107,7 @@ class AbstractDoubleAgentSkill(ABC):
             robot (Articulation): Robot
 
         Returns:
-            torch.Tensor: reward vector
+            dict[str, torch.Tensor]: Reward components
         """
         raise NotImplementedError("This method should be overridden by subclasses")
     
@@ -192,13 +192,13 @@ class DoubleAgentSkillsFromSingleAgentSkills(AbstractDoubleAgentSkill):
     def compute_rewards(self, env_ids: torch.Tensor, robot_dict: dict[str, Articulation], 
                         actions: torch.Tensor, previous_actions: torch.Tensor,
                         contact_sensor: ContactSensor, step_dt: float,
-                        feet_ids: list[int], undesired_contact_body_ids: list[int]) -> torch.Tensor:
+                        feet_ids: list[int], undesired_contact_body_ids: list[int]) -> dict[str, torch.Tensor]:
         # env_ids: (N) boolean mask
         rewards1 = self.skill1.compute_rewards(env_ids, robot_dict[self.robot1_name], actions, previous_actions,
                                                contact_sensor, step_dt, feet_ids, undesired_contact_body_ids)  # (E)
         rewards2 = self.skill2.compute_rewards(env_ids, robot_dict[self.robot2_name], actions, previous_actions,
                                                contact_sensor, step_dt, feet_ids, undesired_contact_body_ids)  # (E)
-        return (rewards1 + rewards2) / 2  # (E)
+        return {self.robot1_name: rewards1, self.robot2_name: rewards2}
 
 
 
