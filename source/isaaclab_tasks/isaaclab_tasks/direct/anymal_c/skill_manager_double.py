@@ -13,6 +13,7 @@ from abc import ABC, abstractmethod
 from isaaclab.utils import configclass
 import pdb
 
+from single_quadruped import SingleQuadruped
 from skill_manager_single import AbstractSingleAgentSkill
 
 class AbstractDoubleAgentSkill(ABC):
@@ -30,12 +31,12 @@ class AbstractDoubleAgentSkill(ABC):
         self._timeout_vec = torch.zeros(size=(num_envs,), device=self._device).uniform_(self._timeout*0.8, self._timeout)
     
     @abstractmethod
-    def set_new_internals(self, env_ids: torch.Tensor, robot_dict: dict[str, Articulation]) -> None:
+    def set_new_internals(self, env_ids: torch.Tensor, robot_dict: dict[str, SingleQuadruped]) -> None:
         """Sets the new internals for the given env_ids
 
         Args:
             env_ids (torch.Tensor): (E) indices
-            robot (Articulation): Robot
+            robot_dict (dict[str, SingleQuadruped]): Dictionary of robot names to SingleQuadruped instances
         """
         raise NotImplementedError("This method should be overridden by subclasses")
     
@@ -52,12 +53,12 @@ class AbstractDoubleAgentSkill(ABC):
         raise NotImplementedError("This method should be overridden by subclasses")
     
     @abstractmethod
-    def get_failures(self, env_ids: torch.Tensor, robot_dict: dict[str, Articulation]) -> torch.Tensor:
+    def get_failures(self, env_ids: torch.Tensor, robot_dict: dict[str, SingleQuadruped]) -> torch.Tensor:
         """Returns a (N) boolean vector of envs that have failed the skill
 
         Args:
             env_ids (torch.Tensor): (N) boolean mask
-            robot (Articulation): Robot
+            robot_dict (dict[str, SingleQuadruped]): Dictionary of robot names to SingleQuadruped instances
 
         Returns:
             torch.Tensor: (E) boolean vector of envs that have failed the skill
@@ -65,12 +66,12 @@ class AbstractDoubleAgentSkill(ABC):
         raise NotImplementedError("This method should be overridden by subclasses")
     
     @abstractmethod
-    def get_successes(self, env_ids: torch.Tensor, robot_dict: dict[str, Articulation]) -> torch.Tensor:
+    def get_successes(self, env_ids: torch.Tensor, robot_dict: dict[str, SingleQuadruped]) -> torch.Tensor:
         """Returns a (N) boolean vector of envs that have completed the skill
 
         Args:
             env_ids (torch.Tensor): (N) boolean mask
-            robot (Articulation): Robot
+            robot_dict (dict[str, SingleQuadruped]): Dictionary of robot names to SingleQuadruped instances
 
         Returns:
             torch.Tensor: (E) boolean vector of envs that have completed the skill
@@ -78,33 +79,41 @@ class AbstractDoubleAgentSkill(ABC):
         raise NotImplementedError("This method should be overridden by subclasses")
     
     @abstractmethod
-    def update(self, env_ids: torch.Tensor, robot_dict: dict[str, Articulation]) -> None:
+    def update(self, env_ids: torch.Tensor, robot_dict: dict[str, SingleQuadruped]) -> None:
         """Updates the internals for the given env_ids, e.g., timesteps, raw_commands, etc.
 
         Args:
             env_ids (torch.Tensor): (N) boolean mask
-            robot (Articulation): Robot
+            robot_dict (dict[str, SingleQuadruped]): Dictionary of robot names to SingleQuadruped instances
         """
         raise NotImplementedError("This method should be overridden by subclasses")
     
     @abstractmethod
     def set_debug_vis_impl(self, debug_vis: bool):
+        """Sets the debug visualization implementation
+
+        Args:
+            debug_vis (bool): Whether to enable debug visualization
+        """
         raise NotImplementedError("This method should be overridden by subclasses")
     
     @abstractmethod
-    def debug_vis_callback(self, env_ids: torch.Tensor, robot_dict: dict[str, Articulation]):
+    def debug_vis_callback(self, env_ids: torch.Tensor, robot_dict: dict[str, SingleQuadruped]):
+        """Callback for debug visualization
+
+        Args:
+            env_ids (torch.Tensor): (N) boolean mask
+            robot_dict (dict[str, SingleQuadruped]): Dictionary of robot names to SingleQuadruped instances
+        """
         raise NotImplementedError("This method should be overridden by subclasses")
     
     @abstractmethod
-    def compute_rewards(self, env_ids: torch.Tensor, robot_dict: dict[str, Articulation], 
-                                actions: torch.Tensor, previous_actions: torch.Tensor,
-                                contact_sensor: ContactSensor, step_dt: float,
-                                feet_ids: list[int], undesired_contact_body_ids: list[int]) -> dict[str, torch.Tensor]:
+    def compute_rewards(self, env_ids: torch.Tensor, robot_dict: dict[str, SingleQuadruped]) -> dict[str, torch.Tensor]:
         """Returns the (E) reward tensor for the given env_ids. Also logs the reward components.
 
         Args:
             env_ids (torch.Tensor): (N) boolean mask
-            robot (Articulation): Robot
+            robot_dict (dict[str, SingleQuadruped]): Dictionary of robot names to SingleQuadruped instances
 
         Returns:
             dict[str, torch.Tensor]: Reward components
@@ -138,6 +147,7 @@ class AbstractDoubleAgentSkill(ABC):
         return f"{self.__class__.__name__}({params}, success_rate={self.get_success_rate():.2f})"
     
     
+
 class DoubleAgentSkillsFromSingleAgentSkills(AbstractDoubleAgentSkill):
     def __init__(self, robot1_name: str, skill1: AbstractSingleAgentSkill, 
                     robot2_name: str, skill2: AbstractSingleAgentSkill, timeout: float, dts_memory=100):
@@ -152,7 +162,7 @@ class DoubleAgentSkillsFromSingleAgentSkills(AbstractDoubleAgentSkill):
         self.skill1.set_non_params(num_envs, device)
         self.skill2.set_non_params(num_envs, device)
 
-    def set_new_internals(self, env_ids: torch.Tensor, robot_dict: dict[str, Articulation]) -> None:
+    def set_new_internals(self, env_ids: torch.Tensor, robot_dict: dict[str, SingleQuadruped]) -> None:
         # env_ids: (E) indices
         self.skill1.set_new_internals(env_ids, robot_dict[self.robot1_name])
         self.skill2.set_new_internals(env_ids, robot_dict[self.robot2_name])
@@ -163,19 +173,19 @@ class DoubleAgentSkillsFromSingleAgentSkills(AbstractDoubleAgentSkill):
         command2 = self.skill2.get_raw_command(env_ids)  # (E,4)
         return {self.robot1_name: command1, self.robot2_name: command2}
 
-    def get_failures(self, env_ids: torch.Tensor, robot_dict: dict[str, Articulation]) -> torch.Tensor:
+    def get_failures(self, env_ids: torch.Tensor, robot_dict: dict[str, SingleQuadruped]) -> torch.Tensor:
         # env_ids: (N) boolean mask
         failures1 = self.skill1.get_failures(env_ids, robot_dict[self.robot1_name])  # (E)
         failures2 = self.skill2.get_failures(env_ids, robot_dict[self.robot2_name])  # (E)
         return failures1 | failures2  # (E)
 
-    def get_successes(self, env_ids: torch.Tensor, robot_dict: dict[str, Articulation]) -> torch.Tensor:
+    def get_successes(self, env_ids: torch.Tensor, robot_dict: dict[str, SingleQuadruped]) -> torch.Tensor:
         # env_ids: (N) boolean mask
         successes1 = self.skill1.get_successes(env_ids, robot_dict[self.robot1_name])  # (E)
         successes2 = self.skill2.get_successes(env_ids, robot_dict[self.robot2_name])  # (E)
         return successes1 & successes2  # (E)
 
-    def update(self, env_ids: torch.Tensor, robot_dict: dict[str, Articulation]) -> None:
+    def update(self, env_ids: torch.Tensor, robot_dict: dict[str, SingleQuadruped]) -> None:
         # env_ids: (N) boolean mask
         self.skill1.update(env_ids, robot_dict[self.robot1_name])
         self.skill2.update(env_ids, robot_dict[self.robot2_name])
@@ -184,20 +194,15 @@ class DoubleAgentSkillsFromSingleAgentSkills(AbstractDoubleAgentSkill):
         self.skill1.set_debug_vis_impl(debug_vis)
         self.skill2.set_debug_vis_impl(debug_vis)
 
-    def debug_vis_callback(self, env_ids: torch.Tensor, robot_dict: dict[str, Articulation]):
+    def debug_vis_callback(self, env_ids: torch.Tensor, robot_dict: dict[str, SingleQuadruped]):
         # env_ids: (N) boolean mask
         self.skill1.debug_vis_callback(env_ids, robot_dict[self.robot1_name])
         self.skill2.debug_vis_callback(env_ids, robot_dict[self.robot2_name])
 
-    def compute_rewards(self, env_ids: torch.Tensor, robot_dict: dict[str, Articulation], 
-                        actions: torch.Tensor, previous_actions: torch.Tensor,
-                        contact_sensor: ContactSensor, step_dt: float,
-                        feet_ids: list[int], undesired_contact_body_ids: list[int]) -> dict[str, torch.Tensor]:
+    def compute_rewards(self, env_ids: torch.Tensor, robot_dict: dict[str, SingleQuadruped]) -> dict[str, torch.Tensor]:
         # env_ids: (N) boolean mask
-        rewards1 = self.skill1.compute_rewards(env_ids, robot_dict[self.robot1_name], actions, previous_actions,
-                                               contact_sensor, step_dt, feet_ids, undesired_contact_body_ids)  # (E)
-        rewards2 = self.skill2.compute_rewards(env_ids, robot_dict[self.robot2_name], actions, previous_actions,
-                                               contact_sensor, step_dt, feet_ids, undesired_contact_body_ids)  # (E)
+        rewards1 = self.skill1.compute_rewards(env_ids, robot_dict[self.robot1_name])  # (E)
+        rewards2 = self.skill2.compute_rewards(env_ids, robot_dict[self.robot2_name])  # (E)
         return {self.robot1_name: rewards1, self.robot2_name: rewards2}
 
 
@@ -222,7 +227,7 @@ class DoubleAgentDynamicSkillManager:
         self._skill_indices = torch.zeros(size=(self._num_envs,), device=self._device, dtype=torch.long)
         self._prob_tensor = torch.tensor(self._probs, device=self._device)
         
-    def get_should_reset(self, robot_dict: dict[str, Articulation]) -> torch.Tensor:
+    def get_should_reset(self, robot_dict: dict[str, SingleQuadruped]) -> torch.Tensor:
         """Returns a (N,) boolean vector of envs that should_be_reset"""
         should_be_reset = torch.zeros(size=(self._num_envs,), device=self._device, dtype=torch.bool)
         for i, skill in enumerate(self._skills):
@@ -234,7 +239,7 @@ class DoubleAgentDynamicSkillManager:
                 skill.update_success_rate(int(successes.sum().item()), int(failures.sum().item()))
         return should_be_reset
         
-    def reset(self, env_ids: torch.Tensor, robot_dict: dict[str, Articulation]):
+    def reset(self, env_ids: torch.Tensor, robot_dict: dict[str, SingleQuadruped]):
         """Reset via sampling from commands
         env_ids: (E) indices"""
         self._skill_indices[env_ids] = torch.multinomial(self._prob_tensor, len(env_ids), replacement=True) # (E)
@@ -251,7 +256,7 @@ class DoubleAgentDynamicSkillManager:
                 raw_commands[env_ids] = skill.get_raw_command(env_ids) # (E,4)
         return raw_commands
             
-    def update(self, robot_dict: dict[str, Articulation]):
+    def update(self, robot_dict: dict[str, SingleQuadruped]):
         """Update the commands, called in get_observations"""
         for i, skill in enumerate(self._skills):
             env_ids = self._skill_indices == i # (N)
@@ -262,21 +267,18 @@ class DoubleAgentDynamicSkillManager:
         for skill in self._skills:
             skill.set_debug_vis_impl(debug_vis)
             
-    def debug_vis_callback(self, robot_dict: dict[str, Articulation]):
+    def debug_vis_callback(self, robot_dict: dict[str, SingleQuadruped]):
         for i, skill in enumerate(self._skills):
             skill_env_ids = self._skill_indices == i # (N)
             if skill_env_ids.any():
                 skill.debug_vis_callback(skill_env_ids, robot_dict)
                 
-    def compute_rewards(self, robot_dict: dict[str, Articulation], actions: torch.Tensor, previous_actions: torch.Tensor,
-                         contact_sensor: ContactSensor, step_dt: float,
-                         feet_ids: list[int], undesired_contact_body_ids: list[int]) -> torch.Tensor:
+    def compute_rewards(self, robot_dict: dict[str, SingleQuadruped]) -> torch.Tensor:
         """Returns a (N,) reward vector"""
         rewards = torch.zeros(size=(self._num_envs,), device=self._device)
         for i, skill in enumerate(self._skills):
             env_ids = self._skill_indices == i
             if env_ids.any():
-                rewards[env_ids] = skill.compute_rewards(env_ids, robot_dict, actions, previous_actions,
-                                                         contact_sensor, step_dt, feet_ids, undesired_contact_body_ids)
+                rewards[env_ids] = skill.compute_rewards(env_ids, robot_dict)
         assert torch.all(rewards != 0), "All rewards should be non-zero"
         return rewards
