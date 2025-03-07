@@ -14,8 +14,10 @@ from isaaclab.envs import DirectMARLEnv
 from isaaclab.sensors import ContactSensor, ContactSensorCfg, RayCaster
 
 from .mod_anymal_c_env_cfg import ModAnymalCFlatEnvCfg #, WalkingRewardCfg, SitUnsitRewardCfg
-from .mod_anymal_command_manager import DynamicSkillManager
+# from .mod_anymal_command_manager import DynamicSkillManager
 # from .mod_anymal_reward_manager import CustomRewardManager
+from .skill_manager_double import DoubleAgentDynamicSkillManager
+from .single_quadruped import SingleQuadruped
 
 ## Visualizations
 # from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
@@ -26,70 +28,6 @@ from .mod_anymal_command_manager import DynamicSkillManager
 """taskset -c 40-79 python scripts/reinforcement_learning/skrl/train.py --task=Isaac-Velocity-Mod-Flat-Anymal-C-Direct-v0 \
 --headless --video --video_length=600 --video_interval=10000 --num_envs=1024"""
 
-
-class SingleQuadruped:
-    def __init__(self, cfg, agent_name: str, robot_cfg: ArticulationCfg, 
-                 contact_sensor_cfg: ContactSensorCfg, num_envs: int):
-        self._cfg = cfg
-        self._agent_name = agent_name
-        self._robot_cfg = robot_cfg
-        self._contact_sensor_cfg = contact_sensor_cfg
-        self._num_envs = num_envs
-        
-    # def setup_scene(self):
-        self._robot = Articulation(self._robot_cfg)
-        self._contact_sensor = ContactSensor(self._contact_sensor_cfg)
-        
-    def post_setup_scene(self, device: torch.device, step_dt: float):
-        self._device = device
-        self._step_dt = step_dt
-        self._action_dim: int = self._cfg.action_spaces[self._agent_name]
-        self._action_scale = self._cfg.action_scales[self._agent_name]
-        
-        # Joint position command (deviation from default joint positions)
-        self._actions = torch.zeros(self._num_envs, gym.spaces.flatdim(self._action_dim), device=self._device) # (N,12)
-        self._previous_actions = torch.zeros(self._num_envs, gym.spaces.flatdim(self._action_dim), device=self._device) # (N,12)
-
-        # Get specific body indices
-        self._base_id, _ = self._contact_sensor.find_bodies("base")
-        self._feet_ids, _ = self._contact_sensor.find_bodies(".*FOOT")
-        self._undesired_contact_body_ids, _ = self._contact_sensor.find_bodies(".*THIGH")
-        
-    def pre_physics_step(self, actions: torch.Tensor):
-        self._actions = actions.clone()
-        self._processed_actions = self._cfg.action_scale * self._actions + self._robot.data.default_joint_pos
-        
-    def apply_action(self):
-        self._robot.set_joint_position_target(self._processed_actions)
-        
-    def get_observations(self, raw_commands: torch.Tensor) -> torch.Tensor:
-        """Returns observations for the agent.
-
-        Args:
-            raw_commands (torch.Tensor): (N,4) command vector
-
-        Returns:
-            torch.Tensor: (N,49) as of now
-        """
-        self._previous_actions = self._actions.clone()
-        obs = torch.cat([self._robot.data.root_lin_vel_b, # (N,3): Remove from actor (critic is okay)
-                    self._robot.data.root_ang_vel_b, # (N,3)
-                    self._robot.data.projected_gravity_b, # (N,3)
-                    raw_commands, # (N,4)
-                    self._robot.data.joint_pos - self._robot.data.default_joint_pos, # (N,12)
-                    self._robot.data.joint_vel, # (N,12)
-                    self._actions, # (N,12)
-                    ], dim=-1)
-        return obs
-
-    def get_robot(self):
-        return self._robot
-    
-    def get_contact_sensor(self):
-        return self._contact_sensor
-    
-    def get_name(self):
-        return self._agent_name
 
 class ModAnymalCEnv(DirectMARLEnv):
     cfg: ModAnymalCFlatEnvCfg
@@ -104,8 +42,10 @@ class ModAnymalCEnv(DirectMARLEnv):
         ) # (N,12)
 
         # Skill manager
-        self.skill_manager = DynamicSkillManager(self.num_envs, self.device)
-        self.skill_manager.parse_cfg(cfg.dynamic_skill_cfg)
+        # self.skill_manager = DynamicSkillManager(self.num_envs, self.device)
+        # self.skill_manager.parse_cfg(cfg.dynamic_skill_cfg)
+        self._robot_names = ["robot1", "robot2"]
+        self.skill_manager = DoubleAgentDynamicSkillManager(self._robot_names, self.num_envs, self.device)
 
         # Get specific body indices
         # self._base_id, _ = self._contact_sensor.find_bodies("base")
@@ -142,7 +82,7 @@ class ModAnymalCEnv(DirectMARLEnv):
         self._robot1.apply_action()
         self._robot2.apply_action()
 
-    def _get_observations(self) -> dict:
+    def _get_observations(self) -> dict[str, torch.Tensor]:
         self.skill_manager.update(self._all_robots)
         raw_commands = self.skill_manager.get_raw_commands() # Dictionary str: (N,4)
         observations = dict()
@@ -168,19 +108,20 @@ class ModAnymalCEnv(DirectMARLEnv):
         # observations = {"policy": obs}
         return observations
     
-    def _get_rewards(self) -> torch.Tensor:
-        rewards = self.skill_manager.compute_rewards(self._robot, self._actions, self._previous_actions, self._contact_sensor,
-                                                        self.step_dt, self._feet_ids, self._undesired_contact_body_ids)
-        return rewards
+    def _get_rewards(self) -> dict[str, torch.Tensor]:
+        reward_dict = self.skill_manager.compute_rewards(self._all_robots)
+        # rewards = self.skill_manager.compute_rewards(self._robot, self._actions, self._previous_actions, self._contact_sensor,
+        #                                                 self.step_dt, self._feet_ids, self._undesired_contact_body_ids)
+        return reward_dict
 
-    def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
-        time_out = self.episode_length_buf >= self.max_episode_length - 1
-        # # net_contact_forces = self._contact_sensor.data.net_forces_w_history
-        # # died = torch.any(torch.max(torch.norm(net_contact_forces[:, :, self._base_id], dim=-1), dim=1)[0] > 1.0, dim=1)
-        # tipping_threshold = 0.8  # Define a tipping threshold, note that torch.norm(projected_gravity_b) is 1.0
+    def _get_dones(self) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+        timed_out = self.episode_length_buf >= self.max_episode_length - 1
         # died = torch.norm(self._robot.data.projected_gravity_b[:, :2], dim=1) > tipping_threshold
         # return died, time_out
-        return self.skill_manager.get_should_reset(self._robot), time_out
+        terminated = self.skill_manager.get_should_reset(self._all_robots)
+        terminated_dict = {agent: terminated for agent in self.cfg.possible_agents}
+        timed_out_dict = {agent: timed_out for agent in self.cfg.possible_agents}
+        return terminated_dict, timed_out_dict
 
     def _reset_idx(self, env_ids: torch.Tensor | None):
         if env_ids is None or len(env_ids) == self.num_envs:

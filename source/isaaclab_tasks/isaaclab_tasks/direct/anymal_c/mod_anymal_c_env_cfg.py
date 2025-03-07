@@ -6,7 +6,7 @@
 import isaaclab.envs.mdp as mdp
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg
-from isaaclab.envs import DirectRLEnvCfg
+from isaaclab.envs import DirectMARLEnvCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.scene import InteractiveSceneCfg
@@ -155,16 +155,21 @@ class SitUnsitRewardCfg:
 ########################################################################
 
 @configclass
-class ModAnymalCFlatEnvCfg(DirectRLEnvCfg):
+class ModAnymalCFlatEnvCfg(DirectMARLEnvCfg):
     # env
     episode_length_s = 20.0
     decimation = 4
-    action_scale = 0.5
-    action_space = 12
+    possible_agents = ["robot1", "robot2"]
+    action_spaces = {"robot1": 12, "robot2": 12}
+    action_scales = {"robot1": 0.5, "robot2": 0.5}
+    observation_spaces = {"robot1": 49, "robot2": 49}
+    state_space = -1
+    # action_scale = 0.5
+    # action_space = 12
     # observation_space = 48+37+1 #RVMod: Was 48, now +1 as adding additional command
-    observation_space = 48+1 #RVMod: Was 48, now +1 as adding additional command
+    # observation_space = 48+1 #RVMod: Was 48, now +1 as adding additional command
     # observation_space = 236 # If including raycaster (cannot though)
-    state_space = 0
+    # state_space = 0
     debug_vis = True
 
     # simulation

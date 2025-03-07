@@ -28,7 +28,7 @@ class AbstractSingleAgentSkill(ABC):
     
     @staticmethod
     @abstractmethod
-    def create_config_dict() -> dict:
+    def create_config_dict() -> tuple[str, dict]:
         raise NotImplementedError("This method should be overridden by subclasses")
     
     @staticmethod
@@ -179,14 +179,13 @@ class WalkSkillCfg:
 class WalkSkill(AbstractSingleAgentSkill):
     @staticmethod
     def create_config_dict(timeout: float, dir: tuple[float, float, float], 
-                 holdtime: int, randomize=True, dts_memory=100) -> dict:
-        return {
-            "timeout": timeout,
-            "dir": dir,
-            "holdtime": holdtime,
-            "randomize": randomize,
-            "dts_memory": dts_memory
-        }
+                 holdtime: int, randomize=True, dts_memory=100) -> tuple[str, dict]:
+        return ("WalkSkill", 
+                    {"timeout": timeout,
+                    "dir": dir,
+                    "holdtime": holdtime,
+                    "randomize": randomize,
+                    "dts_memory": dts_memory})
     
     @staticmethod
     def create_reward_config_dict(linear_vel_reward_scale = 2.0, yaw_rate_reward_scale = 1.0, z_vel_reward_scale = -1.0,
@@ -364,13 +363,12 @@ class ReachZSkillCfg:
     
 class ReachZSkill(AbstractSingleAgentSkill):
     @staticmethod
-    def create_config_dict(timeout: float, holdtime: int, ztarget_type: str, dts_memory=100) -> dict:
-        return {
-            "timeout": timeout,
-            "holdtime": holdtime,
-            "ztarget_type": ztarget_type,
-            "dts_memory": dts_memory
-        }
+    def create_config_dict(timeout: float, holdtime: int, ztarget_type: str, dts_memory=100) -> tuple[str, dict]:
+        return ("ReachZSkill", 
+                    {"timeout": timeout,
+                    "holdtime": holdtime,
+                    "ztarget_type": ztarget_type,
+                    "dts_memory": dts_memory})
         
     @staticmethod
     def create_reward_config_dict(lin_vel_reward_scale = 0.2, yaw_rate_reward_scale = 0.2, z_reward_scale = 2.0,
@@ -525,23 +523,23 @@ class ReachZSkill(AbstractSingleAgentSkill):
     
     
     
-@configclass
-class SequenceOfSkillsCfg:
-    skill_sequence = [
-        ("ReachZSkill", ReachZSkillCfg(timeout=800, ztarget_type="random", holdtime=5)),
-        ("ReachZSkill", ReachZSkillCfg(timeout=800, ztarget_type="walking", holdtime=5)),
-        ("WalkSkill", WalkSkillCfg(timeout=800, dir=(0.0, 0.0, 0.0), holdtime=50, randomize=True)),]
-    reset_on_intermediate_failures = False
-    dts_memory = 100
+# @configclass
+# class SequenceOfSkillsCfg:
+#     skill_sequence = [
+#         ("ReachZSkill", ReachZSkillCfg(timeout=800, ztarget_type="random", holdtime=5)),
+#         ("ReachZSkill", ReachZSkillCfg(timeout=800, ztarget_type="walking", holdtime=5)),
+#         ("WalkSkill", WalkSkillCfg(timeout=800, dir=(0.0, 0.0, 0.0), holdtime=50, randomize=True)),]
+#     reset_on_intermediate_failures = False
+#     dts_memory = 100
     
 class SequenceOfSkills(AbstractSingleAgentSkill):
     @staticmethod
-    def create_config_dict(skill_sequence: list[dict], reset_on_intermediate_failures: bool, dts_memory=100) -> dict:
-        return {
-            "skill_sequence": skill_sequence,
-            "reset_on_intermediate_failures": reset_on_intermediate_failures,
-            "dts_memory": dts_memory
-        }
+    def create_config_dict(skill_sequence: list[dict], reset_on_intermediate_failures: bool, dts_memory=100) -> tuple[str, dict]:
+        return ("SequenceOfSkills", 
+                    {"skill_sequence": skill_sequence,
+                    "reset_on_intermediate_failures": reset_on_intermediate_failures,
+                    "dts_memory": dts_memory
+                    })
         
     @staticmethod
     def create_reward_config_dict() -> dict:
@@ -665,11 +663,11 @@ class DynamicSkillCfg:
     #     ("ReachZSkill", ReachZSkillCfg(ztarget_type="sitting"), 0.5)]
     
     skills: list[tuple[str, dict, float]] = [
-        ("ReachZSkill", ReachZSkill.create_config_dict(timeout=800, ztarget_type="random", holdtime=5), 0.5),
-        ("ReachZSkill", ReachZSkill.create_config_dict(timeout=800, ztarget_type="walking", holdtime=5), 0.5),
-        ("WalkSkill", WalkSkill.create_config_dict(timeout=800, dir=(0.0, 0.0, 0.0), holdtime=50, randomize=True), 1.0)]
+        (*ReachZSkill.create_config_dict(timeout=800, ztarget_type="random", holdtime=5), 0.5),
+        (*ReachZSkill.create_config_dict(timeout=800, ztarget_type="walking", holdtime=5), 0.5),
+        (*WalkSkill.create_config_dict(timeout=800, dir=(0.0, 0.0, 0.0), holdtime=50, randomize=True), 1.0)]
     
-def parse_single_quadruped_cfg_skills(skill_name, skill_cfg) -> AbstractSingleAgentSkill:
+def parse_single_quadruped_cfg_skills(skill_name: str, skill_cfg: dict) -> AbstractSingleAgentSkill:
     if skill_name == "WalkSkill":
         skill_cfg["reward_cfg"] = WalkSkillRewardCfg(**skill_cfg["reward_cfg"])
         skill = WalkSkill(**skill_cfg)
@@ -677,90 +675,90 @@ def parse_single_quadruped_cfg_skills(skill_name, skill_cfg) -> AbstractSingleAg
         skill_cfg["reward_cfg"] = ReachZSkillRewardCfg(**skill_cfg["reward_cfg"])
         skill = ReachZSkill(**skill_cfg)
     elif skill_name == "SequenceOfSkillsCfg":
-        skill_cfg["skill_sequence"] = [parse_cfg_skills(skill_name, skill_cfg) for skill_name, skill_cfg in skill_cfg["skill_sequence"]]
+        skill_cfg["skill_sequence"] = [parse_single_quadruped_cfg_skills(skill_name, skill_cfg) for skill_name, skill_cfg in skill_cfg["skill_sequence"]]
         skill = SequenceOfSkills(**skill_cfg)
     else:
         raise ValueError(f"Unknown skill name: {skill_name}")
     return skill
     
-class DynamicSkillManager:
-    def __init__(self, num_envs: int, device: torch.device):
-        self._num_envs = num_envs
-        self._device = device
-        self._skills: list[AbstractSingleAgentSkill] = []
-        self._probs: list[float] = []
+# class DynamicSkillManager:
+#     def __init__(self, num_envs: int, device: torch.device):
+#         self._num_envs = num_envs
+#         self._device = device
+#         self._skills: list[AbstractSingleAgentSkill] = []
+#         self._probs: list[float] = []
         
-    def parse_cfg(self, skills_cfg: DynamicSkillCfg):
-        self._skills.clear()
-        self._probs.clear()
-        for skill_name, skill_cfg, prob in skills_cfg.skills:
-            # Note: For some reason skill_cfg is a dict, so we need to convert it to a configclass
-            skill = parse_single_quadruped_cfg_skills(skill_name, skill_cfg)
-            skill.set_non_params(self._num_envs, self._device)
-            self._skills.append(skill)
-            self._probs.append(prob)
+#     def parse_cfg(self, skills_cfg: DynamicSkillCfg):
+#         self._skills.clear()
+#         self._probs.clear()
+#         for skill_name, skill_cfg, prob in skills_cfg.skills:
+#             # Note: For some reason skill_cfg is a dict, so we need to convert it to a configclass
+#             skill = parse_single_quadruped_cfg_skills(skill_name, skill_cfg)
+#             skill.set_non_params(self._num_envs, self._device)
+#             self._skills.append(skill)
+#             self._probs.append(prob)
             
-        self._skill_indices = torch.zeros(size=(self._num_envs,), device=self._device, dtype=torch.long)
-        self._prob_tensor = torch.tensor(self._probs, device=self._device)
+#         self._skill_indices = torch.zeros(size=(self._num_envs,), device=self._device, dtype=torch.long)
+#         self._prob_tensor = torch.tensor(self._probs, device=self._device)
         
-    def get_should_reset(self, robot: Articulation) -> torch.Tensor:
-        """Returns a (N,) boolean vector of envs that should_be_reset"""
-        should_be_reset = torch.zeros(size=(self._num_envs,), device=self._device, dtype=torch.bool)
-        for i, skill in enumerate(self._skills):
-            env_ids = self._skill_indices == i # (N)
-            if env_ids.any():
-                failures = skill.get_failures(env_ids, robot) # (E)
-                successes = skill.get_successes(env_ids, robot) # (E)
-                should_be_reset[env_ids] = failures | successes
-                skill.update_success_rate(int(successes.sum().item()), int(failures.sum().item()))
-        return should_be_reset
+#     def get_should_reset(self, robot: Articulation) -> torch.Tensor:
+#         """Returns a (N,) boolean vector of envs that should_be_reset"""
+#         should_be_reset = torch.zeros(size=(self._num_envs,), device=self._device, dtype=torch.bool)
+#         for i, skill in enumerate(self._skills):
+#             env_ids = self._skill_indices == i # (N)
+#             if env_ids.any():
+#                 failures = skill.get_failures(env_ids, robot) # (E)
+#                 successes = skill.get_successes(env_ids, robot) # (E)
+#                 should_be_reset[env_ids] = failures | successes
+#                 skill.update_success_rate(int(successes.sum().item()), int(failures.sum().item()))
+#         return should_be_reset
         
-    def reset(self, env_ids: torch.Tensor, robot: Articulation):
-        """Reset via sampling from commands
-        env_ids: (E) indices"""
-        self._skill_indices[env_ids] = torch.multinomial(self._prob_tensor, len(env_ids), replacement=True) # (E)
-        for i, skill in enumerate (self._skills):
-            new_skill_envs = env_ids[self._skill_indices[env_ids] == i] # (E)
-            if len(new_skill_envs) > 0:
-                skill.set_new_internals(new_skill_envs, robot)
+#     def reset(self, env_ids: torch.Tensor, robot: Articulation):
+#         """Reset via sampling from commands
+#         env_ids: (E) indices"""
+#         self._skill_indices[env_ids] = torch.multinomial(self._prob_tensor, len(env_ids), replacement=True) # (E)
+#         for i, skill in enumerate (self._skills):
+#             new_skill_envs = env_ids[self._skill_indices[env_ids] == i] # (E)
+#             if len(new_skill_envs) > 0:
+#                 skill.set_new_internals(new_skill_envs, robot)
             
-    def get_raw_commands(self) -> torch.Tensor:
-        raw_commands = torch.zeros(size=(self._num_envs, 4), device=self._device)
-        for i, skill in enumerate(self._skills):
-            env_ids = self._skill_indices == i # (N)
-            if env_ids.any():
-                raw_commands[env_ids] = skill.get_raw_command(env_ids) # (E,4)
-        return raw_commands
+#     def get_raw_commands(self) -> torch.Tensor:
+#         raw_commands = torch.zeros(size=(self._num_envs, 4), device=self._device)
+#         for i, skill in enumerate(self._skills):
+#             env_ids = self._skill_indices == i # (N)
+#             if env_ids.any():
+#                 raw_commands[env_ids] = skill.get_raw_command(env_ids) # (E,4)
+#         return raw_commands
             
-    def update(self, robot: Articulation):
-        """Update the commands, called in get_observations"""
-        for i, skill in enumerate(self._skills):
-            env_ids = self._skill_indices == i # (N)
-            if env_ids.any():
-                skill.update(env_ids, robot)
+#     def update(self, robot: Articulation):
+#         """Update the commands, called in get_observations"""
+#         for i, skill in enumerate(self._skills):
+#             env_ids = self._skill_indices == i # (N)
+#             if env_ids.any():
+#                 skill.update(env_ids, robot)
             
-    def set_debug_vis_impl(self, debug_vis: bool):
-        for skill in self._skills:
-            skill.set_debug_vis_impl(debug_vis)
+#     def set_debug_vis_impl(self, debug_vis: bool):
+#         for skill in self._skills:
+#             skill.set_debug_vis_impl(debug_vis)
             
-    def debug_vis_callback(self, robot: Articulation):
-        for i, skill in enumerate(self._skills):
-            skill_env_ids = self._skill_indices == i # (N)
-            if skill_env_ids.any():
-                skill.debug_vis_callback(skill_env_ids, robot)
+#     def debug_vis_callback(self, robot: Articulation):
+#         for i, skill in enumerate(self._skills):
+#             skill_env_ids = self._skill_indices == i # (N)
+#             if skill_env_ids.any():
+#                 skill.debug_vis_callback(skill_env_ids, robot)
                 
-    def compute_rewards(self, robot: Articulation, actions: torch.Tensor, previous_actions: torch.Tensor,
-                         contact_sensor: ContactSensor, step_dt: float,
-                         feet_ids: list[int], undesired_contact_body_ids: list[int]) -> torch.Tensor:
-        """Returns a (N,) reward vector"""
-        rewards = torch.zeros(size=(self._num_envs,), device=self._device)
-        for i, skill in enumerate(self._skills):
-            env_ids = self._skill_indices == i
-            if env_ids.any():
-                rewards[env_ids] = skill.compute_rewards(env_ids, robot, actions, previous_actions,
-                                                         contact_sensor, step_dt, feet_ids, undesired_contact_body_ids)
-        assert torch.all(rewards != 0), "All rewards should be non-zero"
-        return rewards
+#     def compute_rewards(self, robot: Articulation, actions: torch.Tensor, previous_actions: torch.Tensor,
+#                          contact_sensor: ContactSensor, step_dt: float,
+#                          feet_ids: list[int], undesired_contact_body_ids: list[int]) -> torch.Tensor:
+#         """Returns a (N,) reward vector"""
+#         rewards = torch.zeros(size=(self._num_envs,), device=self._device)
+#         for i, skill in enumerate(self._skills):
+#             env_ids = self._skill_indices == i
+#             if env_ids.any():
+#                 rewards[env_ids] = skill.compute_rewards(env_ids, robot, actions, previous_actions,
+#                                                          contact_sensor, step_dt, feet_ids, undesired_contact_body_ids)
+#         assert torch.all(rewards != 0), "All rewards should be non-zero"
+#         return rewards
 
 
 

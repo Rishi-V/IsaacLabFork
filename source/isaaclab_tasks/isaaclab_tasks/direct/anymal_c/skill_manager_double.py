@@ -20,7 +20,7 @@ from skill_manager_single import AbstractSingleAgentSkill, WalkSkill, ReachZSkil
 class AbstractDoubleAgentSkill(ABC):
     @staticmethod
     @abstractmethod
-    def create_config_dict() -> dict:
+    def create_config_dict() -> tuple[str, dict]:
         raise NotImplementedError("This method should be overridden by subclasses")
     
     @staticmethod
@@ -172,15 +172,14 @@ class DoubleAgentSkillsFromSingleAgentSkills(AbstractDoubleAgentSkill):
     def create_config_dict(timeout: float,
                     skill1_cfg_dict: dict, skill2_cfg_dict: dict,
                     robot1_name: str = "robot1", robot2_name: str = "robot2", 
-                    dts_memory=100) -> dict:
-        return {
-            "robot1_name": robot1_name,
-            "robot2_name": robot2_name,
-            "skill1": skill1_cfg_dict,
-            "skill2": skill2_cfg_dict,
-            "timeout": timeout,
-            "dts_memory": dts_memory
-        }
+                    dts_memory=100) -> tuple[str, dict]:
+        return ("DoubleAgentSkillsFromSingleAgentSkills", 
+                    {"robot1_name": robot1_name,
+                    "robot2_name": robot2_name,
+                    "skill1": skill1_cfg_dict,
+                    "skill2": skill2_cfg_dict,
+                    "timeout": timeout,
+                    "dts_memory": dts_memory})
         
     @staticmethod
     def create_reward_config_dict(weight1 = 0.5, weight2 = 0.5) -> dict:
@@ -189,13 +188,13 @@ class DoubleAgentSkillsFromSingleAgentSkills(AbstractDoubleAgentSkill):
             "weight2": weight2
         }
     
-    def __init__(self, robot1_name: str, skill1: AbstractSingleAgentSkill, 
-                    robot2_name: str, skill2: AbstractSingleAgentSkill, timeout: float, dts_memory=100):
+    def __init__(self, robot1_name: str, skill1_config_tuple: tuple[str, dict], 
+                    robot2_name: str, skill2_config_tuple: tuple[str, dict], timeout: float, dts_memory=100):
         super().__init__(timeout, dts_memory)
         self.robot1_name = robot1_name
         self.robot2_name = robot2_name
-        self.skill1 = skill1
-        self.skill2 = skill2
+        self.skill1 = parse_single_quadruped_cfg_skills(*skill1_config_tuple)
+        self.skill2 = parse_single_quadruped_cfg_skills(*skill2_config_tuple)
 
     def set_non_params(self, num_envs: int, device: torch.device):
         super().set_non_params(num_envs, device)
@@ -249,21 +248,18 @@ class DoubleAgentSkillsFromSingleAgentSkills(AbstractDoubleAgentSkill):
 @configclass
 class DoubleAgentDynamicSkillCfg:
     skills: list[tuple[str, dict, float]] = [
-        ("DoubleAgentSkillsFromSingleAgentSkills", 
-            DoubleAgentSkillsFromSingleAgentSkills.create_config_dict(timeout=400, 
-                    skill1_cfg_dict=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, randomize=True), 
-                    skill2_cfg_dict=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, randomize=True)), 
+        (*DoubleAgentSkillsFromSingleAgentSkills.create_config_dict(timeout=400, 
+            skill1_cfg_dict=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, randomize=True)[1], 
+            skill2_cfg_dict=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, randomize=True)[1]), 
             1.0)
     ]
 
-def parse_cfg_skills(skill_name: str, skill_cfg: dict) -> AbstractSingleAgentSkill:
+def parse_cfg_skills(skill_name: str, skill_cfg: dict) -> AbstractDoubleAgentSkill:
     if skill_name == "DoubleAgentSkillsFromSingleAgentSkills":
-        skill_cfg["skill1"] = parse_single_quadruped_cfg_skills(skill_cfg["skill1"])
-        skill_cfg["skill2"] = parse_single_quadruped_cfg_skills(skill_cfg["skill2"])
         skill = DoubleAgentSkillsFromSingleAgentSkills(**skill_cfg)
-    elif skill_name == "ReachZSkill":
-        skill_cfg["reward_cfg"] = ReachZSkillRewardCfg(**skill_cfg["reward_cfg"])
-        skill = ReachZSkill(**skill_cfg)
+    # elif skill_name == "ReachZSkill":
+    #     skill_cfg["reward_cfg"] = ReachZSkillRewardCfg(**skill_cfg["reward_cfg"])
+    #     skill = ReachZSkill(**skill_cfg)
     else:
         raise ValueError(f"Unknown skill name: {skill_name}")
     return skill
@@ -293,6 +289,7 @@ class DoubleAgentDynamicSkillManager:
     def get_should_reset(self, robot_dict: dict[str, SingleQuadruped]) -> torch.Tensor:
         """Returns a (N,) boolean vector of envs that should_be_reset"""
         should_be_reset = torch.zeros(size=(self._num_envs,), device=self._device, dtype=torch.bool)
+            
         for i, skill in enumerate(self._skills):
             env_ids = self._skill_indices == i # (N)
             if env_ids.any():
