@@ -5,14 +5,14 @@ import torch
 
 from isaaclab.assets import Articulation, ArticulationCfg
 from isaaclab.sensors import ContactSensor, ContactSensorCfg, RayCaster
-
-# from .mod_anymal_reward_manager import CustomRewardManager
+import isaaclab.sim as sim_utils # For coloring
 
 ## Visualizations
 # from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 # from isaaclab.markers.config import RED_ARROW_X_MARKER_CFG, BLUE_ARROW_X_MARKER_CFG
 # import isaaclab.utils.math as math_utils
 # # from isaaclab.envs.mdp.commands.velocity_command import UniformVelocityCommand # Contains example of marker
+
 
 class SingleQuadruped:
     def __init__(self, cfg, agent_name: str, robot_cfg: ArticulationCfg, 
@@ -23,9 +23,15 @@ class SingleQuadruped:
         self._contact_sensor_cfg = contact_sensor_cfg
         self._num_envs = num_envs
         
-    # def setup_scene(self):
         self._robot = Articulation(self._robot_cfg)
         self._contact_sensor = ContactSensor(self._contact_sensor_cfg)
+        # self._robot.root_physx_view
+        
+        # self._robot.root_physx_view.set_material_properties({
+        #     "base_color": (0.5, 0.2, 0.8),  # RGBA values
+        #     "metallic": 0.0,
+        #     "roughness": 0.5
+        # })
         
     def post_setup_scene(self, device: torch.device, step_dt: float):
         self._device = device
