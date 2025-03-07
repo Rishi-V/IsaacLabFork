@@ -11,7 +11,9 @@ import torch
 import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation, ArticulationCfg
 from isaaclab.envs import DirectMARLEnv
+from isaaclab.envs.common import AgentID
 from isaaclab.sensors import ContactSensor, ContactSensorCfg, RayCaster
+
 
 from .mod_anymal_c_env_cfg import ModAnymalCFlatEnvCfg #, WalkingRewardCfg, SitUnsitRewardCfg
 # from .mod_anymal_command_manager import DynamicSkillManager
@@ -36,21 +38,24 @@ class ModAnymalCEnv(DirectMARLEnv):
         super().__init__(cfg, render_mode, **kwargs)
 
         # Joint position command (deviation from default joint positions)
-        self._actions = torch.zeros(self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device) # (N,12)
-        self._previous_actions = torch.zeros(
-            self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device
-        ) # (N,12)
+        # self._actions = torch.zeros(self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device) # (N,12)
+        # self._previous_actions = torch.zeros(
+        #     self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device
+        # ) # (N,12)
 
         # Skill manager
         # self.skill_manager = DynamicSkillManager(self.num_envs, self.device)
         # self.skill_manager.parse_cfg(cfg.dynamic_skill_cfg)
         self._robot_names = ["robot1", "robot2"]
         self.skill_manager = DoubleAgentDynamicSkillManager(self._robot_names, self.num_envs, self.device)
+        self.skill_manager.parse_cfg(cfg.dynamic_skill_cfg)
 
         # Get specific body indices
         # self._base_id, _ = self._contact_sensor.find_bodies("base")
         # self._feet_ids, _ = self._contact_sensor.find_bodies(".*FOOT")
         # self._undesired_contact_body_ids, _ = self._contact_sensor.find_bodies(".*THIGH")
+        self._robot1.post_setup_scene(self.device, self.step_dt)
+        self._robot2.post_setup_scene(self.device, self.step_dt)
         self.set_debug_vis(debug_vis=cfg.debug_vis)
 
     def _setup_scene(self):
@@ -121,40 +126,22 @@ class ModAnymalCEnv(DirectMARLEnv):
         terminated = self.skill_manager.get_should_reset(self._all_robots)
         terminated_dict = {agent: terminated for agent in self.cfg.possible_agents}
         timed_out_dict = {agent: timed_out for agent in self.cfg.possible_agents}
-        return terminated_dict, timed_out_dict
+        return terminated_dict, timed_out_dict # Ignore red squiggles
 
     def _reset_idx(self, env_ids: torch.Tensor | None):
         if env_ids is None or len(env_ids) == self.num_envs:
-            env_ids = self._robot._ALL_INDICES
-        self._robot.reset(env_ids)
-        super()._reset_idx(env_ids)
+            env_ids = self._robot1.get_robot()._ALL_INDICES
+        self._robot1.reset(env_ids, self._terrain.env_origins)
+        self._robot2.reset(env_ids, self._terrain.env_origins)
+        super()._reset_idx(env_ids) # Ignore red squiggles
         if len(env_ids) == self.num_envs:
             # Spread out the resets to avoid spikes in training when many environments reset at a similar time
             self.episode_length_buf[:] = torch.randint_like(self.episode_length_buf, high=int(self.max_episode_length))
-        self._actions[env_ids] = 0.0
-        self._previous_actions[env_ids] = 0.0
-        
-        ### Reset robot state
-        joint_pos = self._robot.data.default_joint_pos[env_ids]
-        joint_vel = self._robot.data.default_joint_vel[env_ids]
-        default_root_state = self._robot.data.default_root_state[env_ids]
-        default_root_state[:, :3] += self._terrain.env_origins[env_ids]
-        self._robot.write_root_pose_to_sim(default_root_state[:, :7], env_ids)
-        self._robot.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
-        self._robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
-        ### Reset static anymal
-        # random_position = torch.rand(size=(len(env_ids), 3), device=self.device) * torch.tensor([1.0, 1.0, 0.0], device=self.device)
-        # default_root_state = self._static_anymal.data.default_root_state[env_ids]
-        # default_root_state[:, :3] += self._terrain.env_origins[env_ids] #+ random_position
-        # self._static_anymal.write_root_pose_to_sim(default_root_state[:, :7], env_ids)
-        # joint_vel = self._static_anymal.data.default_joint_vel[env_ids]
-        # self._static_anymal.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
-        # self._static_anymal.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
+        # self._actions[env_ids] = 0.0
+        # self._previous_actions[env_ids] = 0.0
         
         ### Sample new commands
-        # self.command_manager.reset_commands(env_ids, self._robot)
-        # self.command_manager.reset_commands2(env_ids, self._robot)
-        self.skill_manager.reset(env_ids, self._robot)
+        self.skill_manager.reset(env_ids, self._all_robots)
         
         # Logging
         extras = dict()
@@ -164,43 +151,41 @@ class ModAnymalCEnv(DirectMARLEnv):
         #     self.reward_manager.episode_sums[key][env_ids] = 0.0
         self.extras["log"] = dict()
         self.extras["log"].update(extras)
-        extras = dict()
-        extras["Episode_Termination/base_contact"] = torch.count_nonzero(self.reset_terminated[env_ids]).item()
-        extras["Episode_Termination/time_out"] = torch.count_nonzero(self.reset_time_outs[env_ids]).item()
-        self.extras["log"].update(extras)
+        # extras = dict()
+        # extras["Episode_Termination/base_contact"] = torch.count_nonzero(self.reset_terminated[env_ids]).item()
+        # extras["Episode_Termination/time_out"] = torch.count_nonzero(self.reset_time_outs[env_ids]).item()
+        # self.extras["log"].update(extras)
 
 
-    def get_static_anymal_obs(self) -> torch.Tensor:
-        static_pos = self._static_anymal.data.root_com_pos_w # (N,3)
-        static_lin_vel = self._static_anymal.data.root_lin_vel_b # (N,3)
-        static_ang_vel = self._static_anymal.data.root_ang_vel_b # (N,3)
-        static_joint_pos = self._static_anymal.data.joint_pos - self._static_anymal.data.default_joint_pos # (N,12)
-        static_joint_vel = self._static_anymal.data.joint_vel # (N,12)
+    # def get_static_anymal_obs(self) -> torch.Tensor:
+    #     static_pos = self._static_anymal.data.root_com_pos_w # (N,3)
+    #     static_lin_vel = self._static_anymal.data.root_lin_vel_b # (N,3)
+    #     static_ang_vel = self._static_anymal.data.root_ang_vel_b # (N,3)
+    #     static_joint_pos = self._static_anymal.data.joint_pos - self._static_anymal.data.default_joint_pos # (N,12)
+    #     static_joint_vel = self._static_anymal.data.joint_vel # (N,12)
         
-        cur_pos = self._robot.data.root_com_pos_w # (N,3)
-        cur_orienation = self._robot.data.root_quat_w # (N,4)
-        static_orientation = self._static_anymal.data.root_quat_w # (N,4)
-        relative_pos = static_pos - cur_pos # (N,3)
-        relative_orientation = math_utils.quat_mul(cur_orienation, math_utils.quat_inv(static_orientation)) # (N,4)
-        relative_lin_vel = static_lin_vel - self._robot.data.root_lin_vel_b # (N,3)
-        relative_ang_vel = static_ang_vel - self._robot.data.root_ang_vel_b # (N,3)
+    #     cur_pos = self._robot.data.root_com_pos_w # (N,3)
+    #     cur_orienation = self._robot.data.root_quat_w # (N,4)
+    #     static_orientation = self._static_anymal.data.root_quat_w # (N,4)
+    #     relative_pos = static_pos - cur_pos # (N,3)
+    #     relative_orientation = math_utils.quat_mul(cur_orienation, math_utils.quat_inv(static_orientation)) # (N,4)
+    #     relative_lin_vel = static_lin_vel - self._robot.data.root_lin_vel_b # (N,3)
+    #     relative_ang_vel = static_ang_vel - self._robot.data.root_ang_vel_b # (N,3)
         
-        obs = torch.cat([relative_pos, # (N,3)
-                        relative_lin_vel, # (N,3)
-                        relative_ang_vel, # (N,3)
-                        relative_orientation, # (N,4)
-                        static_joint_pos, # (N,12)
-                        static_joint_vel], # (N,12)
-                    dim=-1) # (3+3+3+4+12+12) = (N,37)
-        return obs # (N,37)
+    #     obs = torch.cat([relative_pos, # (N,3)
+    #                     relative_lin_vel, # (N,3)
+    #                     relative_ang_vel, # (N,3)
+    #                     relative_orientation, # (N,4)
+    #                     static_joint_pos, # (N,12)
+    #                     static_joint_vel], # (N,12)
+    #                 dim=-1) # (3+3+3+4+12+12) = (N,37)
+    #     return obs # (N,37)
 
 
     def _set_debug_vis_impl(self, debug_vis: bool):
-        # self.command_manager.set_debug_vis_impl(debug_vis)
         self.skill_manager.set_debug_vis_impl(debug_vis)
         
     def _debug_vis_callback(self, event):
-        # self.command_manager.debug_vis_callback(self._robot)
-        self.skill_manager.debug_vis_callback(self._robot)
+        self.skill_manager.debug_vis_callback(self._all_robots)
 
         

@@ -31,11 +31,11 @@ class SingleQuadruped:
         self._device = device
         self._step_dt = step_dt
         self._action_dim: int = self._cfg.action_spaces[self._agent_name]
-        self._action_scale = self._cfg.action_scales[self._agent_name]
+        self._action_scale: float = self._cfg.action_scales[self._agent_name]
         
         # Joint position command (deviation from default joint positions)
-        self._actions = torch.zeros(self._num_envs, gym.spaces.flatdim(self._action_dim), device=self._device) # (N,12)
-        self._previous_actions = torch.zeros(self._num_envs, gym.spaces.flatdim(self._action_dim), device=self._device) # (N,12)
+        self._actions = torch.zeros(self._num_envs, self._action_dim, device=self._device) # (N,12)
+        self._previous_actions = torch.zeros(self._num_envs, self._action_dim, device=self._device) # (N,12)
 
         # Get specific body indices
         self._base_id, _ = self._contact_sensor.find_bodies("base")
@@ -68,6 +68,25 @@ class SingleQuadruped:
                     self._actions, # (N,12)
                     ], dim=-1)
         return obs
+    
+    def reset(self, env_ids: torch.Tensor, terrain_env_origins: torch.Tensor):
+        """Resets the quadruped.
+
+        Args:
+            env_ids (torch.Tensor): environment ids
+            terrain_env_origins (torch.Tensor): terrain origins to add to the robot's root state
+        """
+        self._actions[env_ids] = 0.0
+        self._previous_actions[env_ids] = 0.0
+        
+        ### Reset robot state
+        joint_pos = self._robot.data.default_joint_pos[env_ids]
+        joint_vel = self._robot.data.default_joint_vel[env_ids]
+        default_root_state = self._robot.data.default_root_state[env_ids]
+        default_root_state[:, :3] += terrain_env_origins[env_ids]
+        self._robot.write_root_pose_to_sim(default_root_state[:, :7], env_ids) # Ignore red squiggles
+        self._robot.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids) # Ignore red squiggles
+        self._robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids) # Ignore red squiggles
 
     def get_robot(self) -> Articulation:
         return self._robot

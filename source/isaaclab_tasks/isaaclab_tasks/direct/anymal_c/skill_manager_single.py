@@ -13,7 +13,7 @@ from abc import ABC, abstractmethod
 from isaaclab.utils import configclass
 import pdb
 
-from single_quadruped import SingleQuadruped
+from .single_quadruped import SingleQuadruped
 
 def assertIndicesNotBoolmask(env_ids: torch.Tensor):
     # assert env_ids.dtype == torch.long, "env_ids should be a tensor of indices, not a boolean mask"

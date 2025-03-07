@@ -22,8 +22,8 @@ from isaaclab_assets.robots.anymal import ANYMAL_C_CFG  # isort: skip
 from isaaclab.terrains.config.rough import ROUGH_TERRAINS_CFG  # isort: skip
 import torch
 # from .mod_anymal_command_manager import AbstractCommand, WalkCommand, SitCommand
-from .mod_anymal_command_manager import AbstractSkill, WalkSkill, ReachZSkill, DynamicSkillCfg
-
+# from .mod_anymal_command_manager import AbstractSkill, WalkSkill, ReachZSkill, DynamicSkillCfg
+from .skill_manager_double import DoubleAgentDynamicSkillCfg
 
 @configclass
 class EventCfg:
@@ -256,4 +256,5 @@ class ModAnymalCFlatEnvCfg(DirectMARLEnvCfg):
     # command_cfg: CustomCommandCfg = CustomCommandCfg()
     # walking_reward_cfg: WalkingRewardCfg = WalkingRewardCfg()
     # situnsit_reward_cfg: SitUnsitRewardCfg = SitUnsitRewardCfg()
-    dynamic_skill_cfg: DynamicSkillCfg = DynamicSkillCfg()
+    # dynamic_skill_cfg: DynamicSkillCfg = DynamicSkillCfg()
+    dynamic_skill_cfg: DoubleAgentDynamicSkillCfg = DoubleAgentDynamicSkillCfg()

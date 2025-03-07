@@ -14,8 +14,8 @@ from isaaclab.utils import configclass
 from dataclasses import MISSING
 import pdb
 
-from single_quadruped import SingleQuadruped
-from skill_manager_single import AbstractSingleAgentSkill, WalkSkill, ReachZSkill, SequenceOfSkills, parse_single_quadruped_cfg_skills
+from .single_quadruped import SingleQuadruped
+from .skill_manager_single import AbstractSingleAgentSkill, WalkSkill, ReachZSkill, SequenceOfSkills, parse_single_quadruped_cfg_skills
 
 class AbstractDoubleAgentSkill(ABC):
     @staticmethod
@@ -158,26 +158,26 @@ class AbstractDoubleAgentSkill(ABC):
         params = ', '.join(f"{k}={v}" for k, v in self.__dict__.items() if k not in IGNORED_PARAMS)
         return f"{self.__class__.__name__}({params}, success_rate={self.get_success_rate():.2f})"
     
-@configclass
-class DoubleAgentSkillCfg:
-    robot1_name: str = "robot1"
-    robot2_name: str = "robot2"
-    skill1 = MISSING
-    skill2 = MISSING
-    timeout = MISSING
-    dts_memory = 100
+# @configclass
+# class DoubleAgentSkillCfg:
+#     robot1_name: str = "robot1"
+#     robot2_name: str = "robot2"
+#     skill1 = MISSING
+#     skill2 = MISSING
+#     timeout = MISSING
+#     dts_memory = 100
 
 class DoubleAgentSkillsFromSingleAgentSkills(AbstractDoubleAgentSkill):
     @staticmethod
     def create_config_dict(timeout: float,
-                    skill1_cfg_dict: dict, skill2_cfg_dict: dict,
+                    skill1_config_tuple: tuple[str, dict], skill2_config_tuple: tuple[str, dict],
                     robot1_name: str = "robot1", robot2_name: str = "robot2", 
                     dts_memory=100) -> tuple[str, dict]:
         return ("DoubleAgentSkillsFromSingleAgentSkills", 
                     {"robot1_name": robot1_name,
                     "robot2_name": robot2_name,
-                    "skill1": skill1_cfg_dict,
-                    "skill2": skill2_cfg_dict,
+                    "skill1_config_tuple": skill1_config_tuple,
+                    "skill2_config_tuple": skill2_config_tuple,
                     "timeout": timeout,
                     "dts_memory": dts_memory})
         
@@ -249,8 +249,8 @@ class DoubleAgentSkillsFromSingleAgentSkills(AbstractDoubleAgentSkill):
 class DoubleAgentDynamicSkillCfg:
     skills: list[tuple[str, dict, float]] = [
         (*DoubleAgentSkillsFromSingleAgentSkills.create_config_dict(timeout=400, 
-            skill1_cfg_dict=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, randomize=True)[1], 
-            skill2_cfg_dict=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, randomize=True)[1]), 
+            skill1_config_tuple=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, randomize=True), 
+            skill2_config_tuple=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, randomize=True)), 
             1.0)
     ]
 
