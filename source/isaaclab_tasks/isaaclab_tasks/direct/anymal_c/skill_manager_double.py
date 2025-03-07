@@ -1,5 +1,6 @@
 import torch
 
+from typing import Optional
 from isaaclab.assets import Articulation
 from isaaclab.sensors import ContactSensor
 
@@ -172,14 +173,19 @@ class DoubleAgentSkillsFromSingleAgentSkills(AbstractDoubleAgentSkill):
     def create_config_dict(timeout: float,
                     skill1_config_tuple: tuple[str, dict], skill2_config_tuple: tuple[str, dict],
                     robot1_name: str = "robot1", robot2_name: str = "robot2", 
-                    dts_memory=100) -> tuple[str, dict]:
+                    dts_memory=100, reward_dict: Optional[dict] = None) -> tuple[str, dict]:
+        if reward_dict is None:
+            reward_dict = DoubleAgentSkillsFromSingleAgentSkills.create_reward_config_dict()
+        else:
+            reward_dict = DoubleAgentSkillsFromSingleAgentSkills.create_reward_config_dict(**reward_dict)
         return ("DoubleAgentSkillsFromSingleAgentSkills", 
                     {"robot1_name": robot1_name,
                     "robot2_name": robot2_name,
                     "skill1_config_tuple": skill1_config_tuple,
                     "skill2_config_tuple": skill2_config_tuple,
                     "timeout": timeout,
-                    "dts_memory": dts_memory})
+                    "dts_memory": dts_memory,
+                    "reward_dict": reward_dict})
         
     @staticmethod
     def create_reward_config_dict(weight1 = 0.5, weight2 = 0.5) -> dict:
@@ -189,12 +195,13 @@ class DoubleAgentSkillsFromSingleAgentSkills(AbstractDoubleAgentSkill):
         }
     
     def __init__(self, robot1_name: str, skill1_config_tuple: tuple[str, dict], 
-                    robot2_name: str, skill2_config_tuple: tuple[str, dict], timeout: float, dts_memory=100):
+                    robot2_name: str, skill2_config_tuple: tuple[str, dict], reward_dict: dict, timeout: float, dts_memory=100):
         super().__init__(timeout, dts_memory)
         self.robot1_name = robot1_name
         self.robot2_name = robot2_name
         self.skill1 = parse_single_quadruped_cfg_skills(*skill1_config_tuple)
         self.skill2 = parse_single_quadruped_cfg_skills(*skill2_config_tuple)
+        self.reward_dict = reward_dict # Note this is not used currently!
 
     def set_non_params(self, num_envs: int, device: torch.device):
         super().set_non_params(num_envs, device)
@@ -249,8 +256,10 @@ class DoubleAgentSkillsFromSingleAgentSkills(AbstractDoubleAgentSkill):
 class DoubleAgentDynamicSkillCfg:
     skills: list[tuple[str, dict, float]] = [
         (*DoubleAgentSkillsFromSingleAgentSkills.create_config_dict(timeout=400, 
-            skill1_config_tuple=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, randomize=True), 
-            skill2_config_tuple=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, randomize=True)), 
+            skill1_config_tuple=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, 
+                                                             randomize=True, reward_dict=None), 
+            skill2_config_tuple=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, 
+                                                             randomize=True, reward_dict=None)), 
             1.0)
     ]
 

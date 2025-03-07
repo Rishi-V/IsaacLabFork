@@ -1,4 +1,5 @@
 import torch
+from typing import Optional
 
 from isaaclab.assets import Articulation, ArticulationData
 from isaaclab.sensors import ContactSensor
@@ -164,8 +165,8 @@ class WalkSkillRewardCfg:
     joint_accel_reward_scale = -2.5e-07
     action_rate_reward_scale = -0.01
     feet_air_time_reward_scale = 0.5
-    undesired_contact_reward_scale = -1 #-1.0
-    flat_orientation_reward_scale = -1
+    undesired_contact_reward_scale = -1.0 #-1.0
+    flat_orientation_reward_scale = -1.0
 
 @configclass
 class WalkSkillCfg:
@@ -179,13 +180,19 @@ class WalkSkillCfg:
 class WalkSkill(AbstractSingleAgentSkill):
     @staticmethod
     def create_config_dict(timeout: float, dir: tuple[float, float, float], 
-                 holdtime: int, randomize=True, dts_memory=100) -> tuple[str, dict]:
+                 holdtime: int, randomize=True, dts_memory=100, 
+                 reward_dict: Optional[dict] = None) -> tuple[str, dict]:
+        if reward_dict is None:
+            reward_dict = WalkSkill.create_reward_config_dict()
+        else:
+            reward_dict = WalkSkill.create_reward_config_dict(**reward_dict)
         return ("WalkSkill", 
                     {"timeout": timeout,
                     "dir": dir,
                     "holdtime": holdtime,
                     "randomize": randomize,
-                    "dts_memory": dts_memory})
+                    "dts_memory": dts_memory,
+                    "reward_dict": reward_dict})
     
     @staticmethod
     def create_reward_config_dict(linear_vel_reward_scale = 2.0, yaw_rate_reward_scale = 1.0, z_vel_reward_scale = -1.0,
@@ -205,7 +212,7 @@ class WalkSkill(AbstractSingleAgentSkill):
             "flat_orientation_reward_scale": flat_orientation_reward_scale
         }
     
-    def __init__(self, reward_cfg: WalkSkillRewardCfg, timeout: float, dir: tuple[float, float, float], 
+    def __init__(self, reward_dict: dict, timeout: float, dir: tuple[float, float, float], 
                  holdtime: int, randomize: bool, dts_memory=100):
         """
         dir: (x,y,yaw) direction to walk in
@@ -218,7 +225,7 @@ class WalkSkill(AbstractSingleAgentSkill):
         ## Internals that get updated
         self._current_timestep: torch.Tensor # = torch.zeros(size=(num_envs,), device=self._device)
         self._raw_commands: torch.Tensor # = torch.zeros(size=(num_envs, 4), device=self._device) #(x,y,yaw,z)
-        self._reward_cfg: WalkSkillRewardCfg = reward_cfg
+        self._reward_cfg: WalkSkillRewardCfg = WalkSkillRewardCfg(**reward_dict)
         
     def set_non_params(self, num_envs, device):
         super().set_non_params(num_envs, device)
@@ -363,12 +370,18 @@ class ReachZSkillCfg:
     
 class ReachZSkill(AbstractSingleAgentSkill):
     @staticmethod
-    def create_config_dict(timeout: float, holdtime: int, ztarget_type: str, dts_memory=100) -> tuple[str, dict]:
+    def create_config_dict(timeout: float, holdtime: int, ztarget_type: str, dts_memory=100, 
+                           reward_dict: Optional[dict] = None) -> tuple[str, dict]:
+        if reward_dict is None:
+            reward_dict = ReachZSkill.create_reward_config_dict()
+        else:
+            reward_dict = ReachZSkill.create_reward_config_dict(**reward_dict)
         return ("ReachZSkill", 
                     {"timeout": timeout,
                     "holdtime": holdtime,
                     "ztarget_type": ztarget_type,
-                    "dts_memory": dts_memory})
+                    "dts_memory": dts_memory,
+                    "reward_dict": reward_dict})
         
     @staticmethod
     def create_reward_config_dict(lin_vel_reward_scale = 0.2, yaw_rate_reward_scale = 0.2, z_reward_scale = 2.0,
@@ -534,11 +547,17 @@ class ReachZSkill(AbstractSingleAgentSkill):
     
 class SequenceOfSkills(AbstractSingleAgentSkill):
     @staticmethod
-    def create_config_dict(skill_sequence: list[dict], reset_on_intermediate_failures: bool, dts_memory=100) -> tuple[str, dict]:
+    def create_config_dict(skill_sequence: list[dict], reset_on_intermediate_failures: bool, dts_memory=100,
+                           reward_dict: Optional[dict] = None) -> tuple[str, dict]:
+        if reward_dict is None:
+            reward_dict = SequenceOfSkills.create_reward_config_dict()
+        else:
+            reward_dict = SequenceOfSkills.create_reward_config_dict(**reward_dict)
         return ("SequenceOfSkills", 
                     {"skill_sequence": skill_sequence,
                     "reset_on_intermediate_failures": reset_on_intermediate_failures,
-                    "dts_memory": dts_memory
+                    "dts_memory": dts_memory,
+                    "reward_dict": reward_dict
                     })
         
     @staticmethod
@@ -649,30 +668,32 @@ class SequenceOfSkills(AbstractSingleAgentSkill):
     
     
     
-@configclass
-class DynamicSkillCfg:
-    # skills: list[tuple[str, configclass, float]] = [
-    #     ("WalkSkill", WalkSkillCfg(), 0.5),
-    #     # ("WalkSkill", WalkSkillCfg(), 0.5),
-    #     # ("ReachZSkill", ReachZSkillCfg(), 0.5)
-    #     ]
+# @configclass
+# class DynamicSkillCfg:
+#     # skills: list[tuple[str, configclass, float]] = [
+#     #     ("WalkSkill", WalkSkillCfg(), 0.5),
+#     #     # ("WalkSkill", WalkSkillCfg(), 0.5),
+#     #     # ("ReachZSkill", ReachZSkillCfg(), 0.5)
+#     #     ]
     
-    # skills: list[tuple[str, configclass, float]] = [
-    #     ("WalkSkill", WalkSkillCfg(), 0.5),
-    #     ("SequenceOfSkillsCfg", SequenceOfSkillsCfg(), 1.0),
-    #     ("ReachZSkill", ReachZSkillCfg(ztarget_type="sitting"), 0.5)]
+#     # skills: list[tuple[str, configclass, float]] = [
+#     #     ("WalkSkill", WalkSkillCfg(), 0.5),
+#     #     ("SequenceOfSkillsCfg", SequenceOfSkillsCfg(), 1.0),
+#     #     ("ReachZSkill", ReachZSkillCfg(ztarget_type="sitting"), 0.5)]
     
-    skills: list[tuple[str, dict, float]] = [
-        (*ReachZSkill.create_config_dict(timeout=800, ztarget_type="random", holdtime=5), 0.5),
-        (*ReachZSkill.create_config_dict(timeout=800, ztarget_type="walking", holdtime=5), 0.5),
-        (*WalkSkill.create_config_dict(timeout=800, dir=(0.0, 0.0, 0.0), holdtime=50, randomize=True), 1.0)]
+#     skills: list[tuple[str, dict, dict, float]] = [
+#         (*ReachZSkill.create_config_dict(timeout=800, ztarget_type="random", holdtime=5),
+#             ReachZSkill.create_reward_config_dict(), 0.5),
+#         # (*ReachZSkill.create_config_dict(timeout=800, ztarget_type="walking", holdtime=5), 0.5),
+#         # (*WalkSkill.create_config_dict(timeout=800, dir=(0.0, 0.0, 0.0), holdtime=50, randomize=True), 1.0)
+#         ]
     
 def parse_single_quadruped_cfg_skills(skill_name: str, skill_cfg: dict) -> AbstractSingleAgentSkill:
     if skill_name == "WalkSkill":
-        skill_cfg["reward_cfg"] = WalkSkillRewardCfg(**skill_cfg["reward_cfg"])
+        # skill_cfg["reward_cfg"] = WalkSkillRewardCfg(**skill_cfg["reward_dict"])
         skill = WalkSkill(**skill_cfg)
     elif skill_name == "ReachZSkill":
-        skill_cfg["reward_cfg"] = ReachZSkillRewardCfg(**skill_cfg["reward_cfg"])
+        skill_cfg["reward_cfg"] = ReachZSkillRewardCfg(**skill_cfg["reward_dict"])
         skill = ReachZSkill(**skill_cfg)
     elif skill_name == "SequenceOfSkillsCfg":
         skill_cfg["skill_sequence"] = [parse_single_quadruped_cfg_skills(skill_name, skill_cfg) for skill_name, skill_cfg in skill_cfg["skill_sequence"]]

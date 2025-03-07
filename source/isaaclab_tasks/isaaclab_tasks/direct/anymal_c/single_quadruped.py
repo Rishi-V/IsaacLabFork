@@ -44,7 +44,7 @@ class SingleQuadruped:
         
     def pre_physics_step(self, actions: torch.Tensor):
         self._actions = actions.clone()
-        self._processed_actions = self._cfg.action_scale * self._actions + self._robot.data.default_joint_pos
+        self._processed_actions = self._action_scale * self._actions + self._robot.data.default_joint_pos
         
     def apply_action(self):
         self._robot.set_joint_position_target(self._processed_actions)
