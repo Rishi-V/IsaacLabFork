@@ -11,12 +11,24 @@ import isaaclab.utils.math as math_utils
 # from isaaclab.envs.mdp.commands.velocity_command import UniformVelocityCommand # Contains example of marker
 from abc import ABC, abstractmethod
 from isaaclab.utils import configclass
+from dataclasses import MISSING
 import pdb
 
 from single_quadruped import SingleQuadruped
-from skill_manager_single import AbstractSingleAgentSkill
+from skill_manager_single import AbstractSingleAgentSkill, WalkSkill, ReachZSkill, SequenceOfSkills, parse_single_quadruped_cfg_skills
 
 class AbstractDoubleAgentSkill(ABC):
+    @staticmethod
+    @abstractmethod
+    def create_config_dict() -> dict:
+        raise NotImplementedError("This method should be overridden by subclasses")
+    
+    @staticmethod
+    @abstractmethod
+    def create_reward_config_dict() -> dict:
+        raise NotImplementedError("This method should be overridden by subclasses")
+    
+    ############ Member functions ############
     def __init__(self, timeout: float, dts_memory=100):
         self._num_envs: int
         self._device: torch.device
@@ -146,9 +158,37 @@ class AbstractDoubleAgentSkill(ABC):
         params = ', '.join(f"{k}={v}" for k, v in self.__dict__.items() if k not in IGNORED_PARAMS)
         return f"{self.__class__.__name__}({params}, success_rate={self.get_success_rate():.2f})"
     
-    
+@configclass
+class DoubleAgentSkillCfg:
+    robot1_name: str = "robot1"
+    robot2_name: str = "robot2"
+    skill1 = MISSING
+    skill2 = MISSING
+    timeout = MISSING
+    dts_memory = 100
 
 class DoubleAgentSkillsFromSingleAgentSkills(AbstractDoubleAgentSkill):
+    @staticmethod
+    def create_config_dict(timeout: float,
+                    skill1_cfg_dict: dict, skill2_cfg_dict: dict,
+                    robot1_name: str = "robot1", robot2_name: str = "robot2", 
+                    dts_memory=100) -> dict:
+        return {
+            "robot1_name": robot1_name,
+            "robot2_name": robot2_name,
+            "skill1": skill1_cfg_dict,
+            "skill2": skill2_cfg_dict,
+            "timeout": timeout,
+            "dts_memory": dts_memory
+        }
+        
+    @staticmethod
+    def create_reward_config_dict(weight1 = 0.5, weight2 = 0.5) -> dict:
+        return {
+            "weight1": weight1,
+            "weight2": weight2
+        }
+    
     def __init__(self, robot1_name: str, skill1: AbstractSingleAgentSkill, 
                     robot2_name: str, skill2: AbstractSingleAgentSkill, timeout: float, dts_memory=100):
         super().__init__(timeout, dts_memory)
@@ -206,15 +246,38 @@ class DoubleAgentSkillsFromSingleAgentSkills(AbstractDoubleAgentSkill):
         return {self.robot1_name: rewards1, self.robot2_name: rewards2}
 
 
+@configclass
+class DoubleAgentDynamicSkillCfg:
+    skills: list[tuple[str, dict, float]] = [
+        ("DoubleAgentSkillsFromSingleAgentSkills", 
+            DoubleAgentSkillsFromSingleAgentSkills.create_config_dict(timeout=400, 
+                    skill1_cfg_dict=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, randomize=True), 
+                    skill2_cfg_dict=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, randomize=True)), 
+            1.0)
+    ]
+
+def parse_cfg_skills(skill_name: str, skill_cfg: dict) -> AbstractSingleAgentSkill:
+    if skill_name == "DoubleAgentSkillsFromSingleAgentSkills":
+        skill_cfg["skill1"] = parse_single_quadruped_cfg_skills(skill_cfg["skill1"])
+        skill_cfg["skill2"] = parse_single_quadruped_cfg_skills(skill_cfg["skill2"])
+        skill = DoubleAgentSkillsFromSingleAgentSkills(**skill_cfg)
+    elif skill_name == "ReachZSkill":
+        skill_cfg["reward_cfg"] = ReachZSkillRewardCfg(**skill_cfg["reward_cfg"])
+        skill = ReachZSkill(**skill_cfg)
+    else:
+        raise ValueError(f"Unknown skill name: {skill_name}")
+    return skill
+
 
 class DoubleAgentDynamicSkillManager:
-    def __init__(self, num_envs: int, device: torch.device):
+    def __init__(self, robot_names, num_envs: int, device: torch.device):
         self._num_envs = num_envs
         self._device = device
         self._skills: list[AbstractDoubleAgentSkill] = []
         self._probs: list[float] = []
+        self._robot_names = robot_names
         
-    def parse_cfg(self, skills_cfg: DynamicSkillCfg):
+    def parse_cfg(self, skills_cfg: DoubleAgentDynamicSkillCfg):
         self._skills.clear()
         self._probs.clear()
         for skill_name, skill_cfg, prob in skills_cfg.skills:
@@ -248,13 +311,18 @@ class DoubleAgentDynamicSkillManager:
             if len(new_skill_envs) > 0:
                 skill.set_new_internals(new_skill_envs, robot_dict)
             
-    def get_raw_commands(self) -> torch.Tensor:
-        raw_commands = torch.zeros(size=(self._num_envs, 4), device=self._device)
+    def get_raw_commands(self) -> dict[str, torch.Tensor]:
+        raw_commands_dict: dict[str, torch.Tensor] = {}
+        for name in self._robot_names:
+            raw_commands_dict[name] = torch.zeros(size=(self._num_envs, 4), device=self._device)
+        
         for i, skill in enumerate(self._skills):
             env_ids = self._skill_indices == i # (N)
             if env_ids.any():
-                raw_commands[env_ids] = skill.get_raw_command(env_ids) # (E,4)
-        return raw_commands
+                raw_command_dict = skill.get_raw_command(env_ids) # dict[str, torch.Tensor]
+                for name in self._robot_names:
+                    raw_commands_dict[name][env_ids] = raw_command_dict[name] # (E,4)
+        return raw_commands_dict
             
     def update(self, robot_dict: dict[str, SingleQuadruped]):
         """Update the commands, called in get_observations"""
@@ -273,12 +341,19 @@ class DoubleAgentDynamicSkillManager:
             if skill_env_ids.any():
                 skill.debug_vis_callback(skill_env_ids, robot_dict)
                 
-    def compute_rewards(self, robot_dict: dict[str, SingleQuadruped]) -> torch.Tensor:
-        """Returns a (N,) reward vector"""
-        rewards = torch.zeros(size=(self._num_envs,), device=self._device)
+    def compute_rewards(self, robot_dict: dict[str, SingleQuadruped]) -> dict[str, torch.Tensor]:
+        """Returns a dictionary (N,) reward vector"""
+        rewards_dict: dict[str, torch.Tensor] = {}
+        for name in self._robot_names:
+            rewards_dict[name] = torch.zeros(size=(self._num_envs,), device=self._device)
+            
         for i, skill in enumerate(self._skills):
             env_ids = self._skill_indices == i
             if env_ids.any():
-                rewards[env_ids] = skill.compute_rewards(env_ids, robot_dict)
-        assert torch.all(rewards != 0), "All rewards should be non-zero"
-        return rewards
+                rewards = skill.compute_rewards(env_ids, robot_dict)
+                for name in self._robot_names:
+                    rewards_dict[name][env_ids] = rewards[name]
+                    
+        for name in self._robot_names:
+            assert torch.all(rewards_dict[name] != 0), "All rewards should be non-zero"
+        return rewards_dict
