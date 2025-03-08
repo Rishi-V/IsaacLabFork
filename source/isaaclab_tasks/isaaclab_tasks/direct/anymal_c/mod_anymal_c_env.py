@@ -47,8 +47,15 @@ class ModAnymalCEnv(DirectMARLEnv):
         self.set_debug_vis(debug_vis=cfg.debug_vis)
 
     def _setup_scene(self):
-        self._robot1 = SingleQuadruped(self.cfg, "robot1", self.cfg.robot_cfg1, self.cfg.contact_sensor1, self.num_envs)
-        self._robot2 = SingleQuadruped(self.cfg, "robot2", self.cfg.robot_cfg2, self.cfg.contact_sensor2, self.num_envs)
+        # Terrain
+        self.cfg.terrain.num_envs = self.scene.cfg.num_envs
+        self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
+        self._terrain = self.cfg.terrain.class_type(self.cfg.terrain)
+        
+        # Robots
+        env_origins: torch.Tensor = self._terrain.env_origins # (N,3) locations of the environments
+        self._robot1 = SingleQuadruped(self.cfg, "robot1", self.cfg.robot_cfg1, self.cfg.contact_sensor1, self.num_envs, env_origins)
+        self._robot2 = SingleQuadruped(self.cfg, "robot2", self.cfg.robot_cfg2, self.cfg.contact_sensor2, self.num_envs, env_origins)
         self._all_robots = {"robot1": self._robot1, "robot2": self._robot2}
         
         self.scene.articulations["robot1"] = self._robot1.get_robot()
@@ -56,9 +63,6 @@ class ModAnymalCEnv(DirectMARLEnv):
         self.scene.sensors["contact_sensor1"] = self._robot1.get_contact_sensor()
         self.scene.sensors["contact_sensor2"] = self._robot2.get_contact_sensor()
         
-        self.cfg.terrain.num_envs = self.scene.cfg.num_envs
-        self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
-        self._terrain = self.cfg.terrain.class_type(self.cfg.terrain)
         # clone and replicate
         self.scene.clone_environments(copy_from_source=False)
         # add lights
@@ -113,8 +117,8 @@ class ModAnymalCEnv(DirectMARLEnv):
     def _reset_idx(self, env_ids: torch.Tensor | None):
         if env_ids is None or len(env_ids) == self.num_envs:
             env_ids = self._robot1.get_robot()._ALL_INDICES
-        self._robot1.reset(env_ids, self._terrain.env_origins)
-        self._robot2.reset(env_ids, self._terrain.env_origins)
+        self._robot1.reset(env_ids)
+        self._robot2.reset(env_ids)
         super()._reset_idx(env_ids) # Ignore red squiggles
         if len(env_ids) == self.num_envs:
             # Spread out the resets to avoid spikes in training when many environments reset at a similar time

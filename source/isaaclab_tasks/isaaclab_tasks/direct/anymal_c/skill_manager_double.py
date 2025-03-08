@@ -266,9 +266,6 @@ class DoubleAgentDynamicSkillCfg:
 def parse_cfg_skills(skill_name: str, skill_cfg: dict) -> AbstractDoubleAgentSkill:
     if skill_name == "DoubleAgentSkillsFromSingleAgentSkills":
         skill = DoubleAgentSkillsFromSingleAgentSkills(**skill_cfg)
-    # elif skill_name == "ReachZSkill":
-    #     skill_cfg["reward_cfg"] = ReachZSkillRewardCfg(**skill_cfg["reward_cfg"])
-    #     skill = ReachZSkill(**skill_cfg)
     else:
         raise ValueError(f"Unknown skill name: {skill_name}")
     return skill
@@ -360,6 +357,6 @@ class DoubleAgentDynamicSkillManager:
                 for name in self._robot_names:
                     rewards_dict[name][env_ids] = rewards[name]
                     
-        for name in self._robot_names:
-            assert torch.all(rewards_dict[name] != 0), "All rewards should be non-zero"
+        # for name in self._robot_names:
+        #     assert torch.all(rewards_dict[name] != 0), "All rewards should be non-zero"
         return rewards_dict

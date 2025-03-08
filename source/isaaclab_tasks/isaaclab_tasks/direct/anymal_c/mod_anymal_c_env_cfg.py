@@ -20,9 +20,6 @@ from isaaclab.utils import configclass
 ##
 from isaaclab_assets.robots.anymal import ANYMAL_C_CFG  # isort: skip
 from isaaclab.terrains.config.rough import ROUGH_TERRAINS_CFG  # isort: skip
-import torch
-# from .mod_anymal_command_manager import AbstractCommand, WalkCommand, SitCommand
-# from .mod_anymal_command_manager import AbstractSkill, WalkSkill, ReachZSkill, DynamicSkillCfg
 from .skill_manager_double import DoubleAgentDynamicSkillCfg
 
 @configclass
@@ -162,14 +159,8 @@ class ModAnymalCFlatEnvCfg(DirectMARLEnvCfg):
     possible_agents = ["robot1", "robot2"]
     action_spaces = {"robot1": 12, "robot2": 12}
     action_scales = {"robot1": 0.5, "robot2": 0.5}
-    observation_spaces = {"robot1": 49, "robot2": 49}
+    observation_spaces = {"robot1": 56, "robot2": 56}
     state_space = -1
-    # action_scale = 0.5
-    # action_space = 12
-    # observation_space = 48+37+1 #RVMod: Was 48, now +1 as adding additional command
-    # observation_space = 48+1 #RVMod: Was 48, now +1 as adding additional command
-    # observation_space = 236 # If including raycaster (cannot though)
-    # state_space = 0
     debug_vis = True
 
     # simulation
@@ -204,12 +195,6 @@ class ModAnymalCFlatEnvCfg(DirectMARLEnvCfg):
 
     # events
     # events: EventCfg = EventCfg()
-
-    # robot
-    # robot: ArticulationCfg = ANYMAL_C_CFG.replace(prim_path="/World/envs/env_.*/Robot")
-    # contact_sensor: ContactSensorCfg = ContactSensorCfg(
-    #     prim_path="/World/envs/env_.*/Robot/.*", history_length=3, update_period=0.005, track_air_time=True
-    # )
     
     robot_cfg1: ArticulationCfg = ANYMAL_C_CFG.replace(prim_path="/World/envs/env_.*/Robot1")
     robot_cfg1.init_state.pos = (-0.7, -0.7, 0.6)
@@ -224,37 +209,4 @@ class ModAnymalCFlatEnvCfg(DirectMARLEnvCfg):
         debug_vis=True # RVMod
     )
     
-    # static other anymal
-    # static_anymal: ArticulationCfg = ANYMAL_C_CFG.replace(prim_path="/World/envs/env_.*/StaticAnymal")
-    # static_anymal.init_state.pos = (0.0, 0.8, 0.6)
-    
-    # we add a height scanner for perceptive locomotion
-    # height_scanner = RayCasterCfg(
-    #     prim_path="/World/envs/env_.*/Robot/base",
-    #     offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
-    #     attach_yaw_only=True,
-    #     pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),
-    #     debug_vis=True,
-    #     # mesh_prim_paths=["/World/ground"],
-    #     mesh_prim_paths=["/World/envs/env_.*/StaticAnymal"],
-    # )
-
-
-    # reward scales
-    # lin_vel_reward_scale = 1.0
-    # yaw_rate_reward_scale = 0.5
-    # z_vel_reward_scale = 2.0 # Reward z-axis velocity reward
-    # # z_pos_reward_scale = -5.0 # RVMod: Want to track z-axis position
-    # ang_vel_reward_scale = -0.05
-    # joint_torque_reward_scale = -2.5e-5
-    # joint_accel_reward_scale = -2.5e-7
-    # action_rate_reward_scale = -0.01
-    # feet_air_time_reward_scale = 0.5
-    # undesired_contact_reward_scale = -10.0 # RVMod: Originally -1.0
-    # flat_orientation_reward_scale = -5.0
-    # command_cfg: CommandCfg = CommandCfg()
-    # command_cfg: CustomCommandCfg = CustomCommandCfg()
-    # walking_reward_cfg: WalkingRewardCfg = WalkingRewardCfg()
-    # situnsit_reward_cfg: SitUnsitRewardCfg = SitUnsitRewardCfg()
-    # dynamic_skill_cfg: DynamicSkillCfg = DynamicSkillCfg()
     dynamic_skill_cfg: DoubleAgentDynamicSkillCfg = DoubleAgentDynamicSkillCfg()

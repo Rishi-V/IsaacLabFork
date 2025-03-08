@@ -16,12 +16,14 @@ import isaaclab.sim as sim_utils # For coloring
 
 class SingleQuadruped:
     def __init__(self, cfg, agent_name: str, robot_cfg: ArticulationCfg, 
-                 contact_sensor_cfg: ContactSensorCfg, num_envs: int):
+                 contact_sensor_cfg: ContactSensorCfg, num_envs: int,
+                 env_origins: torch.Tensor):
         self._cfg = cfg
         self._agent_name = agent_name
         self._robot_cfg = robot_cfg
         self._contact_sensor_cfg = contact_sensor_cfg
         self._num_envs = num_envs
+        self._env_origins = env_origins
         
         self._robot = Articulation(self._robot_cfg)
         self._contact_sensor = ContactSensor(self._contact_sensor_cfg)
@@ -62,20 +64,26 @@ class SingleQuadruped:
             raw_commands (torch.Tensor): (N,4) command vector
 
         Returns:
-            torch.Tensor: (N,49) as of now
+            torch.Tensor: (N,56) as of now
         """
         self._previous_actions = self._actions.clone()
-        obs = torch.cat([self._robot.data.root_lin_vel_b, # (N,3): Remove from actor (critic is okay)
+        obs = torch.cat([
+                    # Proprioception
+                    self._robot.data.root_lin_vel_b, # (N,3): Remove from actor (critic is okay)
                     self._robot.data.root_ang_vel_b, # (N,3)
                     self._robot.data.projected_gravity_b, # (N,3)
-                    raw_commands, # (N,4)
                     self._robot.data.joint_pos - self._robot.data.default_joint_pos, # (N,12)
                     self._robot.data.joint_vel, # (N,12)
+                    # Commands and actions
+                    raw_commands, # (N,4)
                     self._actions, # (N,12)
+                    # Positions and orientations in relative env frame
+                    self._robot.data.root_com_pos_w - self._env_origins, # (N,3)
+                    self._robot.data.root_com_quat_w, # (N,4)
                     ], dim=-1)
         return obs
     
-    def reset(self, env_ids: torch.Tensor, terrain_env_origins: torch.Tensor):
+    def reset(self, env_ids: torch.Tensor):
         """Resets the quadruped.
 
         Args:
@@ -89,7 +97,7 @@ class SingleQuadruped:
         joint_pos = self._robot.data.default_joint_pos[env_ids]
         joint_vel = self._robot.data.default_joint_vel[env_ids]
         default_root_state = self._robot.data.default_root_state[env_ids]
-        default_root_state[:, :3] += terrain_env_origins[env_ids]
+        default_root_state[:, :3] += self._env_origins[env_ids]
         self._robot.write_root_pose_to_sim(default_root_state[:, :7], env_ids) # Ignore red squiggles
         self._robot.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids) # Ignore red squiggles
         self._robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids) # Ignore red squiggles

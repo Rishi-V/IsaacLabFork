@@ -155,27 +155,27 @@ class AbstractSingleAgentSkill(ABC):
         params = ', '.join(f"{k}={v}" for k, v in self.__dict__.items() if k not in IGNORED_PARAMS)
         return f"{self.__class__.__name__}({params}, success_rate={self.get_success_rate():.2f})"
 
-@configclass
-class WalkSkillRewardCfg:
-    lin_vel_reward_scale = 2.0
-    yaw_rate_reward_scale = 1.0
-    z_vel_reward_scale = -1.0
-    ang_vel_reward_scale = -0.05
-    joint_torque_reward_scale = -2.5e-05
-    joint_accel_reward_scale = -2.5e-07
-    action_rate_reward_scale = -0.01
-    feet_air_time_reward_scale = 0.5
-    undesired_contact_reward_scale = -1.0 #-1.0
-    flat_orientation_reward_scale = -1.0
+# @configclass
+# class WalkSkillRewardCfg:
+#     lin_vel_reward_scale = 2.0
+#     yaw_rate_reward_scale = 1.0
+#     z_vel_reward_scale = -1.0
+#     ang_vel_reward_scale = -0.05
+#     joint_torque_reward_scale = -2.5e-05
+#     joint_accel_reward_scale = -2.5e-07
+#     action_rate_reward_scale = -0.01
+#     feet_air_time_reward_scale = 0.5
+#     undesired_contact_reward_scale = -1.0 #-1.0
+#     flat_orientation_reward_scale = -1.0
 
-@configclass
-class WalkSkillCfg:
-    reward_cfg = WalkSkillRewardCfg()
-    timeout = 400
-    dir = (0.0, 0.0, 0.0)
-    holdtime = 50
-    randomize = True
-    dts_memory = 100
+# @configclass
+# class WalkSkillCfg:
+#     reward_cfg = WalkSkillRewardCfg()
+#     timeout = 400
+#     dir = (0.0, 0.0, 0.0)
+#     holdtime = 50
+#     randomize = True
+#     dts_memory = 100
 
 class WalkSkill(AbstractSingleAgentSkill):
     @staticmethod
@@ -211,6 +211,19 @@ class WalkSkill(AbstractSingleAgentSkill):
             "undesired_contact_reward_scale": undesired_contact_reward_scale,
             "flat_orientation_reward_scale": flat_orientation_reward_scale
         }
+        
+    @configclass
+    class WalkSkillRewardCfg:
+        lin_vel_reward_scale = 2.0
+        yaw_rate_reward_scale = 1.0
+        z_vel_reward_scale = -1.0
+        ang_vel_reward_scale = -0.05
+        joint_torque_reward_scale = -2.5e-05
+        joint_accel_reward_scale = -2.5e-07
+        action_rate_reward_scale = -0.01
+        feet_air_time_reward_scale = 0.5
+        undesired_contact_reward_scale = -1.0 #-1.0
+        flat_orientation_reward_scale = -1.0
     
     def __init__(self, reward_dict: dict, timeout: float, dir: tuple[float, float, float], 
                  holdtime: int, randomize: bool, dts_memory=100):
@@ -225,7 +238,7 @@ class WalkSkill(AbstractSingleAgentSkill):
         ## Internals that get updated
         self._current_timestep: torch.Tensor # = torch.zeros(size=(num_envs,), device=self._device)
         self._raw_commands: torch.Tensor # = torch.zeros(size=(num_envs, 4), device=self._device) #(x,y,yaw,z)
-        self._reward_cfg: WalkSkillRewardCfg = WalkSkillRewardCfg(**reward_dict)
+        self._reward_cfg: WalkSkill.WalkSkillRewardCfg = WalkSkill.WalkSkillRewardCfg(**reward_dict)
         
     def set_non_params(self, num_envs, device):
         super().set_non_params(num_envs, device)
@@ -348,25 +361,13 @@ class WalkSkill(AbstractSingleAgentSkill):
         return rewards
     
     
-@configclass
-class ReachZSkillRewardCfg:
-    lin_vel_reward_scale = 0.2
-    yaw_rate_reward_scale = 0.2
-    z_reward_scale = 2.0 # Change to z-height with positive reward
-    flat_orientation_reward_scale = 0.5 # Change to positive reward
-    ang_vel_reward_scale = -0.05
-    joint_torque_reward_scale = -2e-5
-    joint_accel_reward_scale = -5e-9
-    action_rate_reward_scale = -0.01
-    undesired_contact_reward_scale = -1 #-1.0 # RVMod: Originally -1.0
-    
-@configclass
-class ReachZSkillCfg:
-    reward_cfg = ReachZSkillRewardCfg()
-    timeout = 400
-    holdtime = 50
-    ztarget_type = "random"
-    dts_memory = 100
+# @configclass
+# class ReachZSkillCfg:
+#     reward_cfg = ReachZSkillRewardCfg()
+#     timeout = 400
+#     holdtime = 50
+#     ztarget_type = "random"
+#     dts_memory = 100
     
 class ReachZSkill(AbstractSingleAgentSkill):
     @staticmethod
@@ -399,8 +400,21 @@ class ReachZSkill(AbstractSingleAgentSkill):
             "action_rate_reward_scale": action_rate_reward_scale,
             "undesired_contact_reward_scale": undesired_contact_reward_scale
         }
+        
+    @configclass
+    class ReachZSkillRewardCfg:
+        lin_vel_reward_scale = 0.2
+        yaw_rate_reward_scale = 0.2
+        z_reward_scale = 2.0 # Change to z-height with positive reward
+        flat_orientation_reward_scale = 0.5 # Change to positive reward
+        ang_vel_reward_scale = -0.05
+        joint_torque_reward_scale = -2e-5
+        joint_accel_reward_scale = -5e-9
+        action_rate_reward_scale = -0.01
+        undesired_contact_reward_scale = -1 #-1.0 # RVMod: Originally -1.0
     
-    def __init__(self, reward_cfg: ReachZSkillRewardCfg, timeout: float, 
+    
+    def __init__(self, reward_dict: dict, timeout: float, 
                  holdtime: int, ztarget_type: str, dts_memory=100):
         super().__init__(timeout, dts_memory)
         self._holdtime = holdtime
@@ -412,7 +426,7 @@ class ReachZSkill(AbstractSingleAgentSkill):
         self._current_timestep: torch.Tensor # = torch.zeros(size=(num_envs,), device=self._device)
         self._sitting_height: torch.Tensor # = torch.zeros(size=(num_envs,), device=self._device)
         self._raw_commands: torch.Tensor # = torch.zeros(size=(num_envs, 4), device=self._device) #(x,y,yaw,z)
-        self._reward_cfg: ReachZSkillRewardCfg = reward_cfg
+        self._reward_cfg: ReachZSkill.ReachZSkillRewardCfg = ReachZSkill.ReachZSkillRewardCfg(**reward_dict)
         
     def set_non_params(self, num_envs, device):
         super().set_non_params(num_envs, device)
