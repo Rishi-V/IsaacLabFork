@@ -158,15 +158,7 @@ class AbstractDoubleAgentSkill(ABC):
         IGNORED_PARAMS = ["_num_envs", "_device", "_timeout", "_alpha", "_beta", "_C"]
         params = ', '.join(f"{k}={v}" for k, v in self.__dict__.items() if k not in IGNORED_PARAMS)
         return f"{self.__class__.__name__}({params}, success_rate={self.get_success_rate():.2f})"
-    
-# @configclass
-# class DoubleAgentSkillCfg:
-#     robot1_name: str = "robot1"
-#     robot2_name: str = "robot2"
-#     skill1 = MISSING
-#     skill2 = MISSING
-#     timeout = MISSING
-#     dts_memory = 100
+
 
 class DoubleAgentSkillsFromSingleAgentSkills(AbstractDoubleAgentSkill):
     @staticmethod
@@ -260,6 +252,26 @@ class DoubleAgentDynamicSkillCfg:
                                                              randomize=True, reward_dict=None), 
             skill2_config_tuple=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, 
                                                              randomize=True, reward_dict=None)), 
+            1.0),
+        (*DoubleAgentSkillsFromSingleAgentSkills.create_config_dict(timeout=400, 
+            skill1_config_tuple=ReachZSkill.create_config_dict(timeout=400, holdtime=20, ztarget_type="random"), 
+            skill2_config_tuple=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, 
+                                                             randomize=True, reward_dict=None)), 
+            1.0),
+        (*DoubleAgentSkillsFromSingleAgentSkills.create_config_dict(timeout=400, 
+            skill1_config_tuple=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, 
+                                                             randomize=True, reward_dict=None), 
+            skill2_config_tuple=ReachZSkill.create_config_dict(timeout=400, holdtime=20, ztarget_type="random")), 
+            1.0),
+        (*DoubleAgentSkillsFromSingleAgentSkills.create_config_dict(timeout=400,
+            skill1_config_tuple=SequenceOfSkills.create_config_dict(skill_sequence_name_dict=[
+                    WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, randomize=True, reward_dict=None),
+                    ReachZSkill.create_config_dict(timeout=400, holdtime=20, ztarget_type="random")
+                ], reset_on_intermediate_failures=False),
+            skill2_config_tuple=SequenceOfSkills.create_config_dict(skill_sequence_name_dict=[
+                    WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, randomize=True, reward_dict=None),
+                    ReachZSkill.create_config_dict(timeout=400, holdtime=20, ztarget_type="random")
+                ], reset_on_intermediate_failures=False)),
             1.0)
     ]
 

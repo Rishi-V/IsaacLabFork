@@ -5,27 +5,14 @@
 
 from __future__ import annotations
 
-import gymnasium as gym
 import torch
 
 import isaaclab.sim as sim_utils
-from isaaclab.assets import Articulation, ArticulationCfg
 from isaaclab.envs import DirectMARLEnv
-from isaaclab.envs.common import AgentID
-from isaaclab.sensors import ContactSensor, ContactSensorCfg, RayCaster
 
-
-from .mod_anymal_c_env_cfg import ModAnymalCFlatEnvCfg #, WalkingRewardCfg, SitUnsitRewardCfg
-# from .mod_anymal_command_manager import DynamicSkillManager
-# from .mod_anymal_reward_manager import CustomRewardManager
+from .mod_anymal_c_env_cfg import ModAnymalCFlatEnvCfg
 from .skill_manager_double import DoubleAgentDynamicSkillManager
 from .single_quadruped import SingleQuadruped
-
-## Visualizations
-# from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
-# from isaaclab.markers.config import RED_ARROW_X_MARKER_CFG, BLUE_ARROW_X_MARKER_CFG
-# import isaaclab.utils.math as math_utils
-# # from isaaclab.envs.mdp.commands.velocity_command import UniformVelocityCommand # Contains example of marker
 
 """taskset -c 40-79 python scripts/reinforcement_learning/skrl/train.py --task=Isaac-Velocity-Mod-Flat-Anymal-C-Direct-v0 \
 --headless --video --video_length=600 --video_interval=10000 --num_envs=1024"""
@@ -78,29 +65,11 @@ class ModAnymalCEnv(DirectMARLEnv):
         self._robot2.apply_action()
 
     def _get_observations(self) -> dict[str, torch.Tensor]:
-        self.skill_manager.update(self._all_robots)
+        self.skill_manager.update(self._all_robots) # Updates commands before getting observations
         raw_commands = self.skill_manager.get_raw_commands() # Dictionary str: (N,4)
         observations = dict()
         observations["robot1"] = self._robot1.get_observations(raw_commands["robot1"])
         observations["robot2"] = self._robot2.get_observations(raw_commands["robot2"])
-        
-        # # self.command_manager.update_commands(self._robot) # Update actions before getting observations
-        # self._previous_actions = self._actions.clone()
-        # # height_data = (
-        # #     self._height_scanner.data.pos_w[:, 2].unsqueeze(1) - self._height_scanner.data.ray_hits_w[..., 2] - 0.5
-        # # ).clip(-1.0, 1.0)
-        # obs = torch.cat([self._robot.data.root_lin_vel_b, # (N,3): Remove from actor (critic is okay)
-        #             self._robot.data.root_ang_vel_b, # (N,3)
-        #             self._robot.data.projected_gravity_b, # (N,3)
-        #             # self.command_manager.get_commands(), # (N,4)
-        #             raw_commands, # (N,4)
-        #             self._robot.data.joint_pos - self._robot.data.default_joint_pos, # (N,12)
-        #             self._robot.data.joint_vel, # (N,12)
-        #             # height_data,
-        #             self._actions, # (N,12)
-        #             # self.get_static_anymal_obs(), # (N,37)
-        #             ], dim=-1)
-        # observations = {"policy": obs}
         return observations
     
     def _get_rewards(self) -> dict[str, torch.Tensor]:

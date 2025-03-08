@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import gymnasium as gym
 import torch
 
 from isaaclab.assets import Articulation, ArticulationCfg
-from isaaclab.sensors import ContactSensor, ContactSensorCfg, RayCaster
+from isaaclab.sensors import ContactSensor, ContactSensorCfg
 import isaaclab.sim as sim_utils # For coloring
 
 ## Visualizations
@@ -27,13 +26,6 @@ class SingleQuadruped:
         
         self._robot = Articulation(self._robot_cfg)
         self._contact_sensor = ContactSensor(self._contact_sensor_cfg)
-        # self._robot.root_physx_view
-        
-        # self._robot.root_physx_view.set_material_properties({
-        #     "base_color": (0.5, 0.2, 0.8),  # RGBA values
-        #     "metallic": 0.0,
-        #     "roughness": 0.5
-        # })
         
     def post_setup_scene(self, device: torch.device, step_dt: float):
         self._device = device
