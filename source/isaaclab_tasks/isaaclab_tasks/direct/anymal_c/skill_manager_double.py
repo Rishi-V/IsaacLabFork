@@ -254,25 +254,33 @@ class DoubleAgentDynamicSkillCfg:
                                                              randomize=True, reward_dict=None)), 
             1.0),
         (*DoubleAgentSkillsFromSingleAgentSkills.create_config_dict(timeout=400, 
-            skill1_config_tuple=ReachZSkill.create_config_dict(timeout=400, holdtime=20, ztarget_type="random"), 
+            skill1_config_tuple=SequenceOfSkills.create_config_dict(skill_sequence_name_dict=[
+                    ReachZSkill.create_config_dict(timeout=400, holdtime=20, ztarget_type="random"),
+                    ReachZSkill.create_config_dict(timeout=400, holdtime=20, ztarget_type="walking"),
+                ], reset_on_intermediate_failures=False),
             skill2_config_tuple=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, 
                                                              randomize=True, reward_dict=None)), 
             1.0),
         (*DoubleAgentSkillsFromSingleAgentSkills.create_config_dict(timeout=400, 
             skill1_config_tuple=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, 
                                                              randomize=True, reward_dict=None), 
-            skill2_config_tuple=ReachZSkill.create_config_dict(timeout=400, holdtime=20, ztarget_type="random")), 
+            skill2_config_tuple=SequenceOfSkills.create_config_dict(skill_sequence_name_dict=[
+                    ReachZSkill.create_config_dict(timeout=400, holdtime=20, ztarget_type="random"),
+                    ReachZSkill.create_config_dict(timeout=400, holdtime=20, ztarget_type="walking"),
+                ], reset_on_intermediate_failures=False)),
             1.0),
         (*DoubleAgentSkillsFromSingleAgentSkills.create_config_dict(timeout=400,
             skill1_config_tuple=SequenceOfSkills.create_config_dict(skill_sequence_name_dict=[
+                    ReachZSkill.create_config_dict(timeout=400, holdtime=20, ztarget_type="sitting"),
+                    ReachZSkill.create_config_dict(timeout=400, holdtime=20, ztarget_type="walking"),
                     WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, randomize=True, reward_dict=None),
-                    ReachZSkill.create_config_dict(timeout=400, holdtime=20, ztarget_type="random")
                 ], reset_on_intermediate_failures=False),
             skill2_config_tuple=SequenceOfSkills.create_config_dict(skill_sequence_name_dict=[
+                    ReachZSkill.create_config_dict(timeout=400, holdtime=20, ztarget_type="sitting"),
+                    ReachZSkill.create_config_dict(timeout=400, holdtime=20, ztarget_type="walking"),
                     WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, randomize=True, reward_dict=None),
-                    ReachZSkill.create_config_dict(timeout=400, holdtime=20, ztarget_type="random")
                 ], reset_on_intermediate_failures=False)),
-            1.0)
+            1.0),
     ]
 
 def parse_cfg_skills(skill_name: str, skill_cfg: dict) -> AbstractDoubleAgentSkill:
