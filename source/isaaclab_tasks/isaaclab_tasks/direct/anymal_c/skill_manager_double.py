@@ -162,8 +162,7 @@ class AbstractDoubleAgentSkill(ABC):
 
 class DoubleAgentSkillsFromSingleAgentSkills(AbstractDoubleAgentSkill):
     @staticmethod
-    def create_config_dict(timeout: float,
-                    skill1_config_tuple: tuple[str, dict], skill2_config_tuple: tuple[str, dict],
+    def create_config_dict(skill1_config_tuple: tuple[str, dict], skill2_config_tuple: tuple[str, dict],
                     robot1_name: str = "robot1", robot2_name: str = "robot2", 
                     dts_memory=100, reward_dict: Optional[dict] = None) -> tuple[str, dict]:
         if reward_dict is None:
@@ -175,7 +174,6 @@ class DoubleAgentSkillsFromSingleAgentSkills(AbstractDoubleAgentSkill):
                     "robot2_name": robot2_name,
                     "skill1_config_tuple": skill1_config_tuple,
                     "skill2_config_tuple": skill2_config_tuple,
-                    "timeout": timeout,
                     "dts_memory": dts_memory,
                     "reward_dict": reward_dict})
         
@@ -187,8 +185,8 @@ class DoubleAgentSkillsFromSingleAgentSkills(AbstractDoubleAgentSkill):
         }
     
     def __init__(self, robot1_name: str, skill1_config_tuple: tuple[str, dict], 
-                    robot2_name: str, skill2_config_tuple: tuple[str, dict], reward_dict: dict, timeout: float, dts_memory=100):
-        super().__init__(timeout, dts_memory)
+                    robot2_name: str, skill2_config_tuple: tuple[str, dict], reward_dict: dict, dts_memory=100):
+        super().__init__(timeout=0, dts_memory=dts_memory)
         self.robot1_name = robot1_name
         self.robot2_name = robot2_name
         self.skill1 = parse_single_quadruped_cfg_skills(*skill1_config_tuple)
@@ -247,37 +245,39 @@ class DoubleAgentSkillsFromSingleAgentSkills(AbstractDoubleAgentSkill):
 @configclass
 class DoubleAgentDynamicSkillCfg:
     skills: list[tuple[str, dict, float]] = [
-        (*DoubleAgentSkillsFromSingleAgentSkills.create_config_dict(timeout=400, 
+        (*DoubleAgentSkillsFromSingleAgentSkills.create_config_dict( 
             skill1_config_tuple=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, 
                                                              randomize=True, reward_dict=None), 
             skill2_config_tuple=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, 
                                                              randomize=True, reward_dict=None)), 
             1.0),
-        (*DoubleAgentSkillsFromSingleAgentSkills.create_config_dict(timeout=400, 
+        (*DoubleAgentSkillsFromSingleAgentSkills.create_config_dict(
             skill1_config_tuple=SequenceOfSkills.create_config_dict(skill_sequence_name_dict=[
-                    ReachZSkill.create_config_dict(timeout=400, holdtime=20, ztarget_type="random"),
-                    ReachZSkill.create_config_dict(timeout=400, holdtime=20, ztarget_type="walking"),
+                    ReachZSkill.create_config_dict(timeout=200, holdtime=20, ztarget_type="random"),
+                    ReachZSkill.create_config_dict(timeout=200, holdtime=20, ztarget_type="walking"),
+                    WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, randomize=True, reward_dict=None),
                 ], reset_on_intermediate_failures=False),
             skill2_config_tuple=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, 
                                                              randomize=True, reward_dict=None)), 
             1.0),
-        (*DoubleAgentSkillsFromSingleAgentSkills.create_config_dict(timeout=400, 
+        (*DoubleAgentSkillsFromSingleAgentSkills.create_config_dict(
             skill1_config_tuple=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, 
                                                              randomize=True, reward_dict=None), 
             skill2_config_tuple=SequenceOfSkills.create_config_dict(skill_sequence_name_dict=[
-                    ReachZSkill.create_config_dict(timeout=400, holdtime=20, ztarget_type="random"),
-                    ReachZSkill.create_config_dict(timeout=400, holdtime=20, ztarget_type="walking"),
+                    ReachZSkill.create_config_dict(timeout=200, holdtime=20, ztarget_type="random"),
+                    ReachZSkill.create_config_dict(timeout=200, holdtime=20, ztarget_type="walking"),
+                    WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, randomize=True, reward_dict=None),
                 ], reset_on_intermediate_failures=False)),
             1.0),
-        (*DoubleAgentSkillsFromSingleAgentSkills.create_config_dict(timeout=400,
+        (*DoubleAgentSkillsFromSingleAgentSkills.create_config_dict(
             skill1_config_tuple=SequenceOfSkills.create_config_dict(skill_sequence_name_dict=[
-                    ReachZSkill.create_config_dict(timeout=400, holdtime=20, ztarget_type="sitting"),
-                    ReachZSkill.create_config_dict(timeout=400, holdtime=20, ztarget_type="walking"),
+                    ReachZSkill.create_config_dict(timeout=200, holdtime=20, ztarget_type="sitting"),
+                    ReachZSkill.create_config_dict(timeout=200, holdtime=20, ztarget_type="walking"),
                     WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, randomize=True, reward_dict=None),
                 ], reset_on_intermediate_failures=False),
             skill2_config_tuple=SequenceOfSkills.create_config_dict(skill_sequence_name_dict=[
-                    ReachZSkill.create_config_dict(timeout=400, holdtime=20, ztarget_type="sitting"),
-                    ReachZSkill.create_config_dict(timeout=400, holdtime=20, ztarget_type="walking"),
+                    ReachZSkill.create_config_dict(timeout=200, holdtime=20, ztarget_type="sitting"),
+                    ReachZSkill.create_config_dict(timeout=200, holdtime=20, ztarget_type="walking"),
                     WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, randomize=True, reward_dict=None),
                 ], reset_on_intermediate_failures=False)),
             1.0),
