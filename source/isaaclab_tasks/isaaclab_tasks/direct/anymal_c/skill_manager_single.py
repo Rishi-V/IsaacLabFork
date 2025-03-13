@@ -25,7 +25,7 @@ def convertBoolmaskToIndices(env_ids: torch.Tensor):
 
 class AbstractSingleAgentSkill(ABC):
     WALKING_HEIGHT = 0.6
-    SITTING_HEIGHT = 0.2
+    SITTING_HEIGHT = 0.1
     
     @staticmethod
     @abstractmethod
@@ -231,10 +231,10 @@ class WalkSkill(AbstractSingleAgentSkill):
         assertIndicesNotBoolmask(env_ids)
         if self._randomize:
             # Randomly sample from [-1,1] for x,y,yaw
-            self._raw_commands[env_ids, :3] = torch.rand(size=(len(env_ids), 3), device=self._device) * 2 - 1
+            self._raw_commands[env_ids, :3] = torch.rand(size=(len(env_ids), 3), device=self._device) * 2 - 1 # Uniform (-1,1)
         else:
             self._raw_commands[env_ids, :3] = torch.tensor(self.dir, device=self._device).repeat(len(env_ids), 1)
-        # Note: Don't need to set the z-axis command as it is always the same from 
+        # Note: Don't need to set the z-axis command as it is always the same from initialization
         self._successful_timesteps[env_ids] = 0
         self._current_timestep[env_ids] = 0
         
@@ -358,10 +358,10 @@ class ReachZSkill(AbstractSingleAgentSkill):
                     "reward_dict": reward_dict})
         
     @staticmethod
-    def create_reward_config_dict(lin_vel_reward_scale = 0.2, yaw_rate_reward_scale = 0.2, z_reward_scale = 2.0,
-                    flat_orientation_reward_scale = 0.5, ang_vel_reward_scale = -0.05, joint_torque_reward_scale = -2e-5,
-                    joint_accel_reward_scale = -5e-9, action_rate_reward_scale = -0.01, 
-                    undesired_contact_reward_scale = -1.0) -> dict:
+    def create_reward_config_dict(lin_vel_reward_scale = 0.02, yaw_rate_reward_scale = 0.02, z_reward_scale = 2.0,
+                    flat_orientation_reward_scale = 0.05, ang_vel_reward_scale = -0.005, joint_torque_reward_scale = -2e-5,
+                    joint_accel_reward_scale = -5e-9, action_rate_reward_scale = -0.001, 
+                    undesired_contact_reward_scale = -0.1) -> dict:
         return {
             "lin_vel_reward_scale": lin_vel_reward_scale,
             "yaw_rate_reward_scale": yaw_rate_reward_scale,
@@ -671,7 +671,7 @@ def get_arrow_settings(arrow_cfg: VisualizationMarkersCfg, xyz_velocity: torch.T
     # arrow-direction
     heading_angle = torch.atan2(xyz_velocity[:, 1], xyz_velocity[:, 0])
     zeros = torch.zeros_like(heading_angle)
-    pitch_angle = torch.atan2(xyz_velocity[:, 2], torch.linalg.norm(xyz_velocity[:,:2], dim=1)) # Add negative sign to z-axis?
+    pitch_angle = torch.atan2(-xyz_velocity[:, 2], torch.linalg.norm(xyz_velocity[:,:2], dim=1)) # Add negative sign to z-axis?
     arrow_quat = math_utils.quat_from_euler_xyz(zeros, pitch_angle, heading_angle)
     # convert everything back from base to world frame
     base_quat_w = robot_data.root_quat_w
