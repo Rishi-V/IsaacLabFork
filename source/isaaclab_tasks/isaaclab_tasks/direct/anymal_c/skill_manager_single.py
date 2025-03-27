@@ -155,8 +155,6 @@ class AbstractSingleAgentSkill(ABC):
         params = ', '.join(f"{k}={v}" for k, v in self.__dict__.items() if k not in IGNORED_PARAMS)
         return f"{self.__class__.__name__}({params}, success_rate={self.get_success_rate():.2f})"
 
-
-
 class WalkSkill(AbstractSingleAgentSkill):
     @staticmethod
     def create_config_dict(timeout: float, dir: tuple[float, float, float], 
@@ -339,9 +337,7 @@ class WalkSkill(AbstractSingleAgentSkill):
         }
         rewards = torch.sum(torch.stack(list(rewards_dict.values()))[:, env_ids], dim=0) # (E)
         return rewards
-    
-    
-    
+     
 class ReachZSkill(AbstractSingleAgentSkill):
     @staticmethod
     def create_config_dict(timeout: float, holdtime: int, ztarget_type: str, dts_memory=100, 
@@ -520,9 +516,191 @@ class ReachZSkill(AbstractSingleAgentSkill):
         ## Original reward calculation
         rewards = torch.sum(torch.stack(list(reward_dict.values()))[:, env_ids], dim=0) # (E)
         return rewards
+
+class SwapSkill(AbstractSingleAgentSkill):
+    @staticmethod
+    def create_config_dict(timeout: float, dir: tuple[float, float, float], 
+                 holdtime: int, randomize=True, dts_memory=100, 
+                 reward_dict: Optional[dict] = None) -> tuple[str, dict]:
+        if reward_dict is None:
+            reward_dict = SwapSkill.create_reward_config_dict()
+        else:
+            reward_dict = SwapSkill.create_reward_config_dict(**reward_dict)
+        return ("SwapSkill", 
+                    {"timeout": timeout,
+                    "dir": dir,
+                    "holdtime": holdtime,
+                    "randomize": randomize,
+                    "dts_memory": dts_memory,
+                    "reward_dict": reward_dict})
     
+    @staticmethod
+    def create_reward_config_dict(linear_vel_reward_scale = 2.0, yaw_rate_reward_scale = 1.0, z_vel_reward_scale = -1.0,
+                    ang_vel_reward_scale = -0.05, joint_torque_reward_scale = -2.5e-05, joint_accel_reward_scale = -2.5e-07,
+                    action_rate_reward_scale = -0.01, feet_air_time_reward_scale = 0.5, undesired_contact_reward_scale = -1.0,
+                    flat_orientation_reward_scale = -1.0) -> dict:
+        return {
+            "lin_vel_reward_scale": linear_vel_reward_scale,
+            "yaw_rate_reward_scale": yaw_rate_reward_scale,
+            "z_vel_reward_scale": z_vel_reward_scale,
+            "ang_vel_reward_scale": ang_vel_reward_scale,
+            "joint_torque_reward_scale": joint_torque_reward_scale,
+            "joint_accel_reward_scale": joint_accel_reward_scale,
+            "action_rate_reward_scale": action_rate_reward_scale,
+            "feet_air_time_reward_scale": feet_air_time_reward_scale,
+            "undesired_contact_reward_scale": undesired_contact_reward_scale,
+            "flat_orientation_reward_scale": flat_orientation_reward_scale
+        }
+        
+    @configclass
+    class SwapSkillRewardCfg:
+        lin_vel_reward_scale = 2.0
+        yaw_rate_reward_scale = 1.0
+        z_vel_reward_scale = -1.0
+        ang_vel_reward_scale = -0.05
+        joint_torque_reward_scale = -2.5e-05
+        joint_accel_reward_scale = -2.5e-07
+        action_rate_reward_scale = -0.01
+        feet_air_time_reward_scale = 0.5
+        undesired_contact_reward_scale = -1.0 #-1.0
+        flat_orientation_reward_scale = -1.0
     
+    def __init__(self, reward_dict: dict, timeout: float, dir: tuple[float, float, float], 
+                 holdtime: int, randomize: bool, dts_memory=100):
+        """
+        dir: (x,y,yaw) direction to walk in
+        """
+        super().__init__(timeout, dts_memory)
+        self.dir = dir
+        self._holdtime = holdtime
+        self._randomize = randomize
+        
+        ## Internals that get updated
+        self._current_timestep: torch.Tensor # = torch.zeros(size=(num_envs,), device=self._device)
+        self._raw_commands: torch.Tensor # = torch.zeros(size=(num_envs, 4), device=self._device) #(x,y,yaw,z)
+        self._reward_cfg: SwapSkill.SwapSkillRewardCfg = SwapSkill.SwapSkillRewardCfg(**reward_dict)
+        
+    def set_non_params(self, num_envs, device):
+        super().set_non_params(num_envs, device)
+        self._current_timestep = torch.zeros(size=(num_envs,), device=self._device)
+        self._successful_timesteps = torch.zeros(size=(num_envs,), device=self._device)
+        self._raw_commands = torch.zeros(size=(num_envs, 4), device=self._device) #(x,y,yaw,z)
+        self._raw_commands[:, 3] = AbstractSingleAgentSkill.WALKING_HEIGHT
     
+    def set_new_internals(self, env_ids: torch.Tensor, quadruped: SingleQuadruped) -> None:
+        assertIndicesNotBoolmask(env_ids)
+        if self._randomize:
+            # Randomly sample from [-1,1] for x,y,yaw
+            self._raw_commands[env_ids, :1] = torch.rand(size=(len(env_ids), 1), device=self._device) * 0.5 + 0.5 # Uniform (0.5,1)
+        else:
+            self._raw_commands[env_ids, :1] = torch.tensor(self.dir, device=self._device).repeat(len(env_ids), 1)
+        # Note: Don't need to set the z-axis command as it is always the same from initialization
+        self._successful_timesteps[env_ids] = 0
+        self._current_timestep[env_ids] = 0
+        
+    def get_raw_command(self, env_ids: torch.Tensor) -> torch.Tensor:
+        return self._raw_commands[env_ids]
+    
+    def get_failures(self, env_ids: torch.Tensor, quadruped: SingleQuadruped) -> torch.Tensor:
+        tipping_threshold = 0.8  # Define a tipping threshold, note that torch.norm(projected_gravity_b) is 1.0
+        robot_data = quadruped.get_robot().data
+        died = torch.norm(robot_data.projected_gravity_b[env_ids, :2], dim=1) > tipping_threshold
+        # return died | (self._current_timestep[env_ids] > self._timeout)
+        return died | (self._current_timestep[env_ids] > self._timeout_vec[env_ids])
+    
+    def get_successes(self, env_ids: torch.Tensor, quadruped: SingleQuadruped) -> torch.Tensor:
+        return self._successful_timesteps[env_ids] > self._holdtime
+    
+    def update(self, env_ids: torch.Tensor, quadruped: SingleQuadruped) -> None:
+        self._current_timestep[env_ids] += 1
+        robot_data = quadruped.get_robot().data
+        lin_vel_error = torch.sum(torch.square(self._raw_commands[:, :2] - robot_data.root_lin_vel_b[:, :2]), dim=1) < 0.1 # (N)
+        yaw_rate_error = torch.square(self._raw_commands[:, 2] - robot_data.root_ang_vel_b[:, 2]) < 0.1 # (N)
+        successful_walks = env_ids & lin_vel_error & yaw_rate_error # (N)
+        self._successful_timesteps[successful_walks] += 1
+    
+    def set_debug_vis_impl(self, debug_vis: bool):
+        if debug_vis:
+            if not hasattr(self, "_visualizer_marker"):
+                marker_cfg = BLUE_ARROW_X_MARKER_CFG.copy() # Blue denotes moving
+                marker_cfg.markers["arrow"].scale = (0.5, 0.5, 0.5)
+                marker_cfg.prim_path = f"/Visuals/Command/robot/walk_arrow"
+                self._visualizer_marker = VisualizationMarkers(marker_cfg)
+                self._visualizer_marker.set_visibility(True)
+                self._marker_cfg = marker_cfg
+        else:
+            if hasattr(self, "_visualizer_marker"):
+                self._visualizer_marker.set_visibility(False)
+                
+    def debug_vis_callback(self, env_ids: torch.Tensor, quadruped: SingleQuadruped):
+        robot_data = quadruped.get_robot().data
+        target_loc = robot_data.root_com_pos_w.clone()  # (N,3)
+        target_loc[:, 2] += 0.5
+        
+        xyz_commands = self._raw_commands[:, [0,1,3]].clone()
+        xyz_commands[:, 2] = xyz_commands[:, 2] - robot_data.root_com_pos_w[:, 2]
+            
+        arrow_scale, arrow_quat = get_arrow_settings(self._marker_cfg, xyz_commands, robot_data, self._device)
+        self._visualizer_marker.visualize(translations=target_loc[env_ids], orientations=arrow_quat[env_ids], scales=arrow_scale[env_ids])     
+    
+    def compute_rewards(self, env_ids: torch.Tensor, quadruped: SingleQuadruped) -> torch.Tensor:
+        # Extract what we need from robot
+        robot_data: ArticulationData = quadruped.get_robot().data
+        actions: torch.Tensor = quadruped.get_actions()
+        previous_actions: torch.Tensor = quadruped.get_previous_actions()
+        contact_sensor: ContactSensor = quadruped.get_contact_sensor()
+        step_dt: float = quadruped.get_step_dt()
+        feet_ids: list[int] = quadruped.get_feet_ids()
+        undesired_contact_body_ids: list[int] = quadruped.get_undesired_contact_body_ids()
+        
+        # linear velocity tracking
+        lin_vel_error = torch.sum(torch.square(self._raw_commands[:, :2] - robot_data.root_lin_vel_b[:, :2]), dim=1)
+        lin_vel_error_mapped = torch.exp(-lin_vel_error / 0.25)
+        # yaw rate tracking
+        yaw_rate_error = torch.square(self._raw_commands[:, 2] - robot_data.root_ang_vel_b[:, 2])
+        yaw_rate_error_mapped = torch.exp(-yaw_rate_error / 0.25)
+        # z position tracking
+        z_error = torch.square(robot_data.root_com_pos_w[:, 2] - self._raw_commands[:, 3])
+        # angular velocity x/y
+        ang_vel_error = torch.sum(torch.square(robot_data.root_ang_vel_b[:, :2]), dim=1)
+        # joint torques
+        joint_torques = torch.sum(torch.square(robot_data.applied_torque), dim=1)
+        # joint acceleration
+        joint_accel = torch.sum(torch.square(robot_data.joint_acc), dim=1)
+        # action rate
+        action_rate = torch.sum(torch.square(actions - previous_actions), dim=1)
+        # feet air time
+        first_contact = contact_sensor.compute_first_contact(step_dt)[:, feet_ids]
+        last_air_time = contact_sensor.data.last_air_time[:, feet_ids] # Ignore red squiggles
+        air_time = torch.sum((last_air_time - 0.5) * first_contact, dim=1) * (
+            torch.norm(self._raw_commands[:, :2], dim=1) > 0.1
+        )
+        # undesired contacts
+        net_contact_forces: torch.Tensor = contact_sensor.data.net_forces_w_history # Ignore red squiggles
+        is_contact = (
+            torch.max(torch.norm(net_contact_forces[:, :, undesired_contact_body_ids], dim=-1), dim=1)[0] > 1.0
+        )
+        contacts = torch.sum(is_contact, dim=1)
+        # flat orientation
+        flat_orientation = torch.sum(torch.square(robot_data.projected_gravity_b[:, :2]), dim=1)
+
+        ### Compute rewards
+        rewards_dict = {
+            "track_lin_vel_xy_exp": lin_vel_error_mapped * self._reward_cfg.lin_vel_reward_scale * step_dt,
+            "track_ang_vel_z_exp": yaw_rate_error_mapped * self._reward_cfg.yaw_rate_reward_scale * step_dt,
+            "lin_vel_z_l2": z_error * self._reward_cfg.z_vel_reward_scale * step_dt, # RVMod
+            "ang_vel_xy_l2": ang_vel_error * self._reward_cfg.ang_vel_reward_scale * step_dt,
+            "dof_torques_l2": joint_torques * self._reward_cfg.joint_torque_reward_scale * step_dt,
+            "dof_acc_l2": joint_accel * self._reward_cfg.joint_accel_reward_scale * step_dt,
+            "action_rate_l2": action_rate * self._reward_cfg.action_rate_reward_scale * step_dt,
+            "feet_air_time": air_time * self._reward_cfg.feet_air_time_reward_scale * step_dt,
+            "undesired_contacts": contacts * self._reward_cfg.undesired_contact_reward_scale * step_dt,
+            "flat_orientation_l2": flat_orientation * self._reward_cfg.flat_orientation_reward_scale * step_dt,
+        }
+        rewards = torch.sum(torch.stack(list(rewards_dict.values()))[:, env_ids], dim=0) # (E)
+        return rewards
+  
+
 class SequenceOfSkills(AbstractSingleAgentSkill):
     @staticmethod
     def create_config_dict(skill_sequence_name_dict: list[tuple[str, dict]], reset_on_intermediate_failures: bool, dts_memory=100,
@@ -645,20 +823,19 @@ class SequenceOfSkills(AbstractSingleAgentSkill):
                 rewards[skill_env_ids] = skill.compute_rewards(skill_env_ids, quadruped)
         assert torch.all(rewards[env_ids] != 0), "All rewards should be non-zero"
         return rewards[env_ids]
-    
-    
+     
 def parse_single_quadruped_cfg_skills(skill_name: str, skill_cfg: dict) -> AbstractSingleAgentSkill:
     if skill_name == "WalkSkill":
         skill = WalkSkill(**skill_cfg)
     elif skill_name == "ReachZSkill":
         skill = ReachZSkill(**skill_cfg)
+    elif skill_name == 'SwapSkill':
+        skill = SwapSkill(**skill_cfg)
     elif skill_name == "SequenceOfSkills":
         skill = SequenceOfSkills(**skill_cfg)
     else:
         raise ValueError(f"Unknown skill name: {skill_name}")
     return skill
-    
-
 
 def get_arrow_settings(arrow_cfg: VisualizationMarkersCfg, xyz_velocity: torch.Tensor, 
                        robot_data: ArticulationData, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:

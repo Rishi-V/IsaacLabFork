@@ -210,3 +210,7 @@ class ModAnymalCFlatEnvCfg(DirectMARLEnvCfg):
     )
     
     dynamic_skill_cfg: DoubleAgentDynamicSkillCfg = DoubleAgentDynamicSkillCfg()
+    target_default_root_state: dict[str, tuple[float, float, float, float, float, float, float]] = {
+        "robot1": (-0.9, -0.0, 0.6, 1.0, 0.0, 0.0, 0.0),
+        "robot2": (0.9, 0.0, 0.6, 0.0, 0.0, 0.0, 1.0)
+    }

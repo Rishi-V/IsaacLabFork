@@ -16,7 +16,7 @@ from dataclasses import MISSING
 import pdb
 
 from .single_quadruped import SingleQuadruped
-from .skill_manager_single import AbstractSingleAgentSkill, WalkSkill, ReachZSkill, SequenceOfSkills, parse_single_quadruped_cfg_skills
+from .skill_manager_single import AbstractSingleAgentSkill, WalkSkill, ReachZSkill, SwapSkill, SequenceOfSkills, parse_single_quadruped_cfg_skills
 
 class AbstractDoubleAgentSkill(ABC):
     @staticmethod
@@ -160,6 +160,10 @@ class AbstractDoubleAgentSkill(ABC):
         return f"{self.__class__.__name__}({params}, success_rate={self.get_success_rate():.2f})"
 
 
+
+
+
+
 class DoubleAgentSkillsFromSingleAgentSkills(AbstractDoubleAgentSkill):
     @staticmethod
     def create_config_dict(skill1_config_tuple: tuple[str, dict], skill2_config_tuple: tuple[str, dict],
@@ -242,50 +246,97 @@ class DoubleAgentSkillsFromSingleAgentSkills(AbstractDoubleAgentSkill):
         return {self.robot1_name: rewards1, self.robot2_name: rewards2}
 
 
+class DoubleAgentSwapSkill(DoubleAgentSkillsFromSingleAgentSkills):
+    @staticmethod
+    def create_config_dict(skill1_config_tuple: tuple[str, dict], skill2_config_tuple: tuple[str, dict],
+                    robot1_name: str = "robot1", robot2_name: str = "robot2", 
+                    dts_memory=100, reward_dict: Optional[dict] = None) -> tuple[str, dict]:
+        if reward_dict is None:
+            reward_dict = DoubleAgentSwapSkill.create_reward_config_dict()
+        else:
+            reward_dict = DoubleAgentSwapSkill.create_reward_config_dict(**reward_dict)
+        return ("DoubleAgentSwapSkill", 
+                    {"robot1_name": robot1_name,
+                    "robot2_name": robot2_name,
+                    "skill1_config_tuple": skill1_config_tuple,
+                    "skill2_config_tuple": skill2_config_tuple,
+                    "dts_memory": dts_memory,
+                    "reward_dict": reward_dict})
+    
+    @staticmethod
+    def create_reward_config_dict(weight1 = 0.5, weight2 = 0.5) -> dict:
+        return {
+            "weight1": weight1,
+            "weight2": weight2
+        }
+    
+
+
 @configclass
 class DoubleAgentDynamicSkillCfg:
     skills: list[tuple[str, dict, float]] = [
-        (*DoubleAgentSkillsFromSingleAgentSkills.create_config_dict( 
-            skill1_config_tuple=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, 
-                                                             randomize=True, reward_dict=None), 
-            skill2_config_tuple=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, 
-                                                             randomize=True, reward_dict=None)), 
-            1.0),
-        (*DoubleAgentSkillsFromSingleAgentSkills.create_config_dict(
+        # (*DoubleAgentSwapSkill.create_config_dict( 
+        #     skill1_config_tuple=SwapSkill.create_config_dict(timeout=500, dir=(0, 0, 0), holdtime=250, 
+        #                                                      randomize=True, reward_dict=None), 
+        #     skill2_config_tuple=ReachZSkill.create_config_dict(timeout=500, ztarget_type="sitting", holdtime=250)), 
+        #     1.0),
+        # (*DoubleAgentSwapSkill.create_config_dict( 
+        #     skill1_config_tuple=ReachZSkill.create_config_dict(timeout=500, ztarget_type="sitting", holdtime=250),
+        #     skill2_config_tuple=SwapSkill.create_config_dict(timeout=500, dir=(0, 0, 0), holdtime=250, 
+        #                                                      randomize=True, reward_dict=None)),  
+        #     1.0),
+        # (*DoubleAgentSkillsFromSingleAgentSkills.create_config_dict( 
+        #     skill1_config_tuple=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, 
+        #                                                      randomize=True, reward_dict=None), 
+        #     skill2_config_tuple=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, 
+        #                                                      randomize=True, reward_dict=None)), 
+        #     1.0),
+        (*DoubleAgentSwapSkill.create_config_dict(
             skill1_config_tuple=SequenceOfSkills.create_config_dict(skill_sequence_name_dict=[
-                    ReachZSkill.create_config_dict(timeout=200, holdtime=20, ztarget_type="random"),
-                    ReachZSkill.create_config_dict(timeout=200, holdtime=20, ztarget_type="walking"),
-                    WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, randomize=True, reward_dict=None),
+                    ReachZSkill.create_config_dict(timeout=500, holdtime=125, ztarget_type="sitting"),
+                    ReachZSkill.create_config_dict(timeout=250, holdtime=125, ztarget_type="walking"),
+                    
                 ], reset_on_intermediate_failures=False),
-            skill2_config_tuple=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, 
-                                                             randomize=True, reward_dict=None)), 
+            skill2_config_tuple=SwapSkill.create_config_dict(timeout=500, dir=(0, 0, 0), holdtime=250, 
+                                                             randomize=True, reward_dict=None)),  
             1.0),
-        (*DoubleAgentSkillsFromSingleAgentSkills.create_config_dict(
-            skill1_config_tuple=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, 
-                                                             randomize=True, reward_dict=None), 
+        (*DoubleAgentSwapSkill.create_config_dict(
             skill2_config_tuple=SequenceOfSkills.create_config_dict(skill_sequence_name_dict=[
-                    ReachZSkill.create_config_dict(timeout=200, holdtime=20, ztarget_type="random"),
-                    ReachZSkill.create_config_dict(timeout=200, holdtime=20, ztarget_type="walking"),
-                    WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, randomize=True, reward_dict=None),
-                ], reset_on_intermediate_failures=False)),
-            1.0),
-        (*DoubleAgentSkillsFromSingleAgentSkills.create_config_dict(
-            skill1_config_tuple=SequenceOfSkills.create_config_dict(skill_sequence_name_dict=[
-                    ReachZSkill.create_config_dict(timeout=200, holdtime=20, ztarget_type="sitting"),
-                    ReachZSkill.create_config_dict(timeout=200, holdtime=20, ztarget_type="walking"),
-                    WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, randomize=True, reward_dict=None),
+                    ReachZSkill.create_config_dict(timeout=500, holdtime=125, ztarget_type="sitting"),
+                    ReachZSkill.create_config_dict(timeout=250, holdtime=125, ztarget_type="walking"),
+                    
                 ], reset_on_intermediate_failures=False),
-            skill2_config_tuple=SequenceOfSkills.create_config_dict(skill_sequence_name_dict=[
-                    ReachZSkill.create_config_dict(timeout=200, holdtime=20, ztarget_type="sitting"),
-                    ReachZSkill.create_config_dict(timeout=200, holdtime=20, ztarget_type="walking"),
-                    WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, randomize=True, reward_dict=None),
-                ], reset_on_intermediate_failures=False)),
+            skill1_config_tuple=SwapSkill.create_config_dict(timeout=500, dir=(0, 0, 0), holdtime=250, 
+                                                             randomize=True, reward_dict=None)),  
             1.0),
+        # (*DoubleAgentSkillsFromSingleAgentSkills.create_config_dict(
+        #     skill1_config_tuple=WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, 
+        #                                                      randomize=True, reward_dict=None), 
+        #     skill2_config_tuple=SequenceOfSkills.create_config_dict(skill_sequence_name_dict=[
+        #             ReachZSkill.create_config_dict(timeout=200, holdtime=20, ztarget_type="random"),
+        #             ReachZSkill.create_config_dict(timeout=200, holdtime=20, ztarget_type="walking"),
+        #             WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, randomize=True, reward_dict=None),
+        #         ], reset_on_intermediate_failures=False)),
+        #     1.0),
+        # (*DoubleAgentSkillsFromSingleAgentSkills.create_config_dict(
+        #     skill1_config_tuple=SequenceOfSkills.create_config_dict(skill_sequence_name_dict=[
+        #             ReachZSkill.create_config_dict(timeout=200, holdtime=20, ztarget_type="sitting"),
+        #             ReachZSkill.create_config_dict(timeout=200, holdtime=20, ztarget_type="walking"),
+        #             WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, randomize=True, reward_dict=None),
+        #         ], reset_on_intermediate_failures=False),
+        #     skill2_config_tuple=SequenceOfSkills.create_config_dict(skill_sequence_name_dict=[
+        #             ReachZSkill.create_config_dict(timeout=200, holdtime=20, ztarget_type="sitting"),
+        #             ReachZSkill.create_config_dict(timeout=200, holdtime=20, ztarget_type="walking"),
+        #             WalkSkill.create_config_dict(timeout=400, dir=(0, 0, 0), holdtime=20, randomize=True, reward_dict=None),
+        #         ], reset_on_intermediate_failures=False)),
+        #     1.0),
     ]
 
 def parse_cfg_skills(skill_name: str, skill_cfg: dict) -> AbstractDoubleAgentSkill:
     if skill_name == "DoubleAgentSkillsFromSingleAgentSkills":
         skill = DoubleAgentSkillsFromSingleAgentSkills(**skill_cfg)
+    elif skill_name == "DoubleAgentSwapSkill":
+        skill = DoubleAgentSwapSkill(**skill_cfg)
     else:
         raise ValueError(f"Unknown skill name: {skill_name}")
     return skill
@@ -295,7 +346,7 @@ class DoubleAgentDynamicSkillManager:
     def __init__(self, robot_names, num_envs: int, device: torch.device):
         self._num_envs = num_envs
         self._device = device
-        self._skills: list[AbstractDoubleAgentSkill] = []
+        self._skills: list[tuple[str, AbstractDoubleAgentSkill]] = []
         self._probs: list[float] = []
         self._robot_names = robot_names
         
@@ -306,7 +357,7 @@ class DoubleAgentDynamicSkillManager:
             # Note: For some reason skill_cfg is a dict, so we need to convert it to a configclass
             skill = parse_cfg_skills(skill_name, skill_cfg)
             skill.set_non_params(self._num_envs, self._device)
-            self._skills.append(skill)
+            self._skills.append((skill_name,skill))
             self._probs.append(prob)
             
         self._skill_indices = torch.zeros(size=(self._num_envs,), device=self._device, dtype=torch.long)
@@ -316,7 +367,7 @@ class DoubleAgentDynamicSkillManager:
         """Returns a (N,) boolean vector of envs that should_be_reset"""
         should_be_reset = torch.zeros(size=(self._num_envs,), device=self._device, dtype=torch.bool)
             
-        for i, skill in enumerate(self._skills):
+        for i, (skill_name, skill) in enumerate(self._skills):
             env_ids = self._skill_indices == i # (N)
             if env_ids.any():
                 failures = skill.get_failures(env_ids, robot_dict) # (E)
@@ -329,7 +380,7 @@ class DoubleAgentDynamicSkillManager:
         """Reset via sampling from commands
         env_ids: (E) indices"""
         self._skill_indices[env_ids] = torch.multinomial(self._prob_tensor, len(env_ids), replacement=True) # (E)
-        for i, skill in enumerate (self._skills):
+        for i, (skill_name, skill) in enumerate (self._skills):
             new_skill_envs = env_ids[self._skill_indices[env_ids] == i] # (E)
             if len(new_skill_envs) > 0:
                 skill.set_new_internals(new_skill_envs, robot_dict)
@@ -339,7 +390,7 @@ class DoubleAgentDynamicSkillManager:
         for name in self._robot_names:
             raw_commands_dict[name] = torch.zeros(size=(self._num_envs, 4), device=self._device)
         
-        for i, skill in enumerate(self._skills):
+        for i, (skill_name, skill) in enumerate(self._skills):
             env_ids = self._skill_indices == i # (N)
             if env_ids.any():
                 raw_command_dict = skill.get_raw_command(env_ids) # dict[str, torch.Tensor]
@@ -349,17 +400,17 @@ class DoubleAgentDynamicSkillManager:
             
     def update(self, robot_dict: dict[str, SingleQuadruped]):
         """Update the commands, called in get_observations"""
-        for i, skill in enumerate(self._skills):
+        for i, (skill_name, skill) in enumerate(self._skills):
             env_ids = self._skill_indices == i # (N)
             if env_ids.any():
                 skill.update(env_ids, robot_dict)
             
     def set_debug_vis_impl(self, debug_vis: bool):
-        for skill in self._skills:
+        for skill_name, skill in self._skills:
             skill.set_debug_vis_impl(debug_vis)
             
     def debug_vis_callback(self, robot_dict: dict[str, SingleQuadruped]):
-        for i, skill in enumerate(self._skills):
+        for i, (skill_name, skill) in enumerate(self._skills):
             skill_env_ids = self._skill_indices == i # (N)
             if skill_env_ids.any():
                 skill.debug_vis_callback(skill_env_ids, robot_dict)
@@ -369,8 +420,8 @@ class DoubleAgentDynamicSkillManager:
         rewards_dict: dict[str, torch.Tensor] = {}
         for name in self._robot_names:
             rewards_dict[name] = torch.zeros(size=(self._num_envs,), device=self._device)
-            
-        for i, skill in enumerate(self._skills):
+
+        for i, (skill_name, skill) in enumerate(self._skills):
             env_ids = self._skill_indices == i
             if env_ids.any():
                 rewards = skill.compute_rewards(env_ids, robot_dict)

@@ -40,7 +40,7 @@ class SingleQuadruped:
         # Get specific body indices
         self._base_id, _ = self._contact_sensor.find_bodies("base")
         self._feet_ids, _ = self._contact_sensor.find_bodies(".*FOOT")
-        self._undesired_contact_body_ids, _ = self._contact_sensor.find_bodies(".*THIGH")
+        self._undesired_contact_body_ids, _ = self._contact_sensor.find_bodies([".*THIGH", "base"])
         
     def pre_physics_step(self, actions: torch.Tensor):
         self._actions = actions.clone()
@@ -75,7 +75,7 @@ class SingleQuadruped:
                     ], dim=-1)
         return obs
     
-    def reset(self, env_ids: torch.Tensor):
+    def reset(self, env_ids: torch.Tensor, target_default_root_state: bool=False):
         """Resets the quadruped.
 
         Args:
@@ -89,7 +89,11 @@ class SingleQuadruped:
         joint_pos = self._robot.data.default_joint_pos[env_ids]
         joint_vel = self._robot.data.default_joint_vel[env_ids]
         default_root_state = self._robot.data.default_root_state[env_ids]
+        if target_default_root_state:
+            default_root_state[:,:7] = torch.tensor(self._cfg.target_default_root_state[self._agent_name], dtype=torch.float, device=self._device)
+            
         default_root_state[:, :3] += self._env_origins[env_ids]
+
         self._robot.write_root_pose_to_sim(default_root_state[:, :7], env_ids) # Ignore red squiggles
         self._robot.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids) # Ignore red squiggles
         self._robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids) # Ignore red squiggles

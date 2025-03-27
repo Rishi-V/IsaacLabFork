@@ -13,6 +13,7 @@ from isaaclab.envs import DirectMARLEnv
 from .mod_anymal_c_env_cfg import ModAnymalCFlatEnvCfg
 from .skill_manager_double import DoubleAgentDynamicSkillManager
 from .single_quadruped import SingleQuadruped
+# from .common import ActionType, AgentID, EnvStepReturn, ObsType, StateType
 
 """taskset -c 40-79 python scripts/reinforcement_learning/skrl/train.py --task=Isaac-Velocity-Mod-Flat-Anymal-C-Direct-v0 \
 --headless --video --video_length=600 --video_interval=10000 --num_envs=1024"""
@@ -29,9 +30,10 @@ class ModAnymalCEnv(DirectMARLEnv):
         self.skill_manager = DoubleAgentDynamicSkillManager(self._robot_names, self.num_envs, self.device)
         self.skill_manager.parse_cfg(cfg.dynamic_skill_cfg)
 
-        self._robot1.post_setup_scene(self.device, self.step_dt)
-        self._robot2.post_setup_scene(self.device, self.step_dt)
+        for robot in self._all_robots:
+            self._all_robots[robot].post_setup_scene(self.device, self.step_dt)
         self.set_debug_vis(debug_vis=cfg.debug_vis)
+        self.logdict = {agent: {} for agent in self.cfg.possible_agents}
 
     def _setup_scene(self):
         # Terrain
@@ -57,12 +59,12 @@ class ModAnymalCEnv(DirectMARLEnv):
         light_cfg.func("/World/Light", light_cfg)
 
     def _pre_physics_step(self, actions: dict[str, torch.Tensor]):
-        self._robot1.pre_physics_step(actions[self._robot1.get_name()])
-        self._robot2.pre_physics_step(actions[self._robot2.get_name()])
+        for robot in self._all_robots:
+            self._all_robots[robot].pre_physics_step(actions[robot])
 
-    def _apply_action(self):
-        self._robot1.apply_action()
-        self._robot2.apply_action()
+    def _apply_action(self):    
+        for robot in self._all_robots:
+            self._all_robots[robot].apply_action()
 
     def _get_observations(self) -> dict[str, torch.Tensor]:
         self.skill_manager.update(self._all_robots) # Updates commands before getting observations
@@ -86,30 +88,41 @@ class ModAnymalCEnv(DirectMARLEnv):
     def _reset_idx(self, env_ids: torch.Tensor | None):
         if env_ids is None or len(env_ids) == self.num_envs:
             env_ids = self._robot1.get_robot()._ALL_INDICES
-        self._robot1.reset(env_ids)
-        self._robot2.reset(env_ids)
+
+
+        self.skill_manager.reset(env_ids, self._all_robots)
+        for i,(skill_name, skill) in enumerate(self.skill_manager._skills):
+            new_skill_envs = env_ids[self.skill_manager._skill_indices[env_ids] == i] # (E)
+            if len(new_skill_envs) > 0 and skill_name == "DoubleAgentSwapSkill":
+                ##reset the robots to desired target_default_root_state
+                self._robot1.reset(new_skill_envs,target_default_root_state=True)
+                self._robot2.reset(new_skill_envs,target_default_root_state=True)
+            elif len(new_skill_envs) > 0 :
+                self._robot1.reset(new_skill_envs)
+                self._robot2.reset(new_skill_envs)
+        
         super()._reset_idx(env_ids) # Ignore red squiggles
         if len(env_ids) == self.num_envs:
             # Spread out the resets to avoid spikes in training when many environments reset at a similar time
             self.episode_length_buf[:] = torch.randint_like(self.episode_length_buf, high=int(self.max_episode_length))
         
         ### Sample new commands
-        self.skill_manager.reset(env_ids, self._all_robots)
+        
         
         # Logging
-        extras = dict()
         # for key in self.reward_manager.episode_sums.keys():
         #     episodic_sum_avg = torch.mean(self.reward_manager.episode_sums[key][env_ids])
         #     extras["Episode_Reward/" + key] = episodic_sum_avg / self.max_episode_length_s
         #     self.reward_manager.episode_sums[key][env_ids] = 0.0
-        self.extras["log"] = dict()
-        self.extras["log"].update(extras)
+        self.extras["log"] = {agent: {} for agent in self.cfg.possible_agents}
         # extras = dict()
         # extras["Episode_Termination/base_contact"] = torch.count_nonzero(self.reset_terminated[env_ids]).item()
         # extras["Episode_Termination/time_out"] = torch.count_nonzero(self.reset_time_outs[env_ids]).item()
         # self.extras["log"].update(extras)
 
-
+    # def step(self, actions: dict[AgentID, ActionType]) -> EnvStepReturn:
+    #     super().step(actions)
+        
     def _set_debug_vis_impl(self, debug_vis: bool):
         self.skill_manager.set_debug_vis_impl(debug_vis)
         
